@@ -2,7 +2,8 @@ import os
 import json
 from typing import Dict, Any
 
-SETTINGS_PATH = os.path.join(os.getcwd(), "data", "settings.json")
+DATA_PATH = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+SETTINGS_PATH = os.path.join(DATA_PATH, "settings.json")
 
 DEFAULT_SETTINGS = {
     "sample_rate": 16000,

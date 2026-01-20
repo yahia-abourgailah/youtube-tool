@@ -88,7 +88,8 @@ def download_video_task(self, video_id: int):
         video.status = "downloading"
         db.commit()
     
-        data_dir = os.path.join(os.getcwd(), "data")
+        base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+        data_dir = os.path.join(base_data_dir, "channels", str(video.channel_id), "videos", str(video.video_id))
         os.makedirs(data_dir, exist_ok=True)
         
         # Download audio
@@ -164,7 +165,8 @@ def download_video_task(self, video_id: int):
                     f"{video.video_id}_transcript.txt",
                     f"{video.video_id}_metadata.json"
                 ]
-                data_dir = os.path.join(os.getcwd(), "data")
+                base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+                data_dir = os.path.join(base_data_dir, "channels", str(video.channel_id), "videos", str(video.video_id))
                 for pattern in patterns:
                     file_path = os.path.join(data_dir, pattern)
                     if os.path.exists(file_path):

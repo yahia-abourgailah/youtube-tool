@@ -8,11 +8,21 @@ load_dotenv()
 
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./sql_app.db")
 
+engine_args = {
+    "pool_size": 20,
+    "max_overflow": 10
+}
+
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    engine_args["connect_args"] = {"check_same_thread": False, "timeout": 30}
+else:
+    # MySQL specific args can be added here if needed, 
+    # but pool_size/max_overflow are already there
+    pass
+
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL, 
-    connect_args={"check_same_thread": False, "timeout": 30} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {},
-    pool_size=20,
-    max_overflow=10
+    **engine_args
 )
 
 # Enable WAL mode for SQLite

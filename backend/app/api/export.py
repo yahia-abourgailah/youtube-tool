@@ -24,7 +24,7 @@ def trigger_export(
 
 @router.get("/download")
 def download_export():
-    data_dir = os.path.join(os.getcwd(), "data")
+    data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
     parquet_path = os.path.join(data_dir, "hf_dataset.parquet")
     if not os.path.exists(parquet_path):
         raise HTTPException(status_code=404, detail="Exported file not found")

@@ -2,8 +2,17 @@
 import sqlalchemy
 from sqlalchemy import text, inspect
 
-# Connect to MySQL database
-engine = sqlalchemy.create_engine('mysql+pymysql://root:root@localhost:3306/egyptian_audio_db')
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+# Connect to the database using the environment variable
+db_url = os.getenv('DATABASE_URL')
+if not db_url:
+    print("DATABASE_URL not found in .env file.")
+    exit(1)
+
+engine = sqlalchemy.create_engine(db_url)
 
 try:
     with engine.connect() as conn:

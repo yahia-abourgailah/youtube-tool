@@ -21,7 +21,8 @@ def split_audio_task(self, video_id: int):
         db.query(models.AudioChunk).filter(models.AudioChunk.video_id == video.id).delete()
         db.commit()
     
-        data_dir = os.path.join(os.getcwd(), "data")
+        base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+        data_dir = os.path.join(base_data_dir, "channels", str(video.channel_id), "videos", str(video.video_id))
         audio_path = os.path.join(data_dir, f"{video.video_id}_audio.wav")
         if not os.path.exists(audio_path):
             # Check for other extensions (legacy)
@@ -45,7 +46,7 @@ def split_audio_task(self, video_id: int):
         
         chunks = audio.split_audio_on_silence(
             audio_path=audio_path,
-            output_dir=data_dir,
+            output_dir=base_data_dir,
             video_id=video.video_id,
             channel_id=channel_id,
             sample_rate=processing_settings.get("sample_rate", 16000),
@@ -132,7 +133,8 @@ def split_audio_task(self, video_id: int):
                     f"{video.video_id}_audio.m4a",
                     f"{video.video_id}_audio.mp3"
                 ]
-                data_dir = os.path.join(os.getcwd(), "data")
+                base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+                data_dir = os.path.join(base_data_dir, "channels", str(video.channel_id), "videos", str(video.video_id))
                 for pattern in patterns:
                     file_path = os.path.join(data_dir, pattern)
                     if os.path.exists(file_path):
@@ -172,12 +174,11 @@ def reprocess_long_chunks_task(self):
             # Get channel_id for hierarchical directory structure
             channel_id = chunk.video.channel_id if chunk.video.channel_id else None
             
-            # Use base data directory - split_audio_on_silence will create the proper structure
-            data_dir = os.path.join(os.getcwd(), "data")
+            base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
             
             new_sub_chunks = audio.split_audio_on_silence(
                 audio_path=old_file_path,
-                output_dir=data_dir,
+                output_dir=base_data_dir,
                 video_id=f"{chunk.chunk_id}_ref", # Ensure unique prefix
                 channel_id=channel_id,
                 **split_kwargs

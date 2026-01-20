@@ -90,9 +90,8 @@ def export_dataset_task(self, job_id: int, repo_id: Optional[str] = None, hf_tok
                 f"Channel Subsets ({len(chunks_by_channel)}):\n{subset_list}\n"
                 f"Private: {private}"
             )
-        else:
             # Only save locally if NOT pushing to Hub
-            data_dir = os.path.join(os.getcwd(), "data")
+            data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
             export_path = os.path.join(data_dir, "hf_dataset")
             local_path, parquet_path = dataset.save_dataset_locally(hf_dataset, export_path)
             activity_log.log_activity(db, f"Dataset saved locally at {parquet_path}", level="info")
