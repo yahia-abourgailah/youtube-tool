@@ -1,0 +1,22 @@
+._*
+# Environment
+.env
+.env.local
+
+# Data & Logs
+data/
+logs/
+
+# Python (Backend)
+backend/__pycache__/
+backend/.venv/
+backend/*.pyc
+backend/sql_app.db
+backend/data
+# Node (Frontend)
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+Thumbs.db

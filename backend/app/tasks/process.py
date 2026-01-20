@@ -1,0 +1,260 @@
+import os
+from ..celery_app import celery_app
+from .. import models, database
+from ..utils import audio, logging as activity_log, settings as settings_util
+import logging
+
+logger = logging.getLogger(__name__)
+
+@celery_app.task(bind=True)
+def split_audio_task(self, video_id: int):
+    """Split video audio into chunks based on silence."""
+    db = database.SessionLocal()
+    try:
+        video = db.query(models.Video).filter(models.Video.id == video_id).first()
+        if not video:
+            return "Video not found"
+        
+        activity_log.log_activity(db, "Starting audio splitting...", video_id=video_id)
+        video.status = "processing"
+        # Clear existing chunks for this video to allow clean re-chunking
+        db.query(models.AudioChunk).filter(models.AudioChunk.video_id == video.id).delete()
+        db.commit()
+    
+        data_dir = os.path.join(os.getcwd(), "data")
+        audio_path = os.path.join(data_dir, f"{video.video_id}_audio.wav")
+        if not os.path.exists(audio_path):
+            # Check for other extensions (legacy)
+            for ext in ['mp4', 'webm', 'm4a', 'mp3']:
+                test_path = os.path.join(data_dir, f"{video.video_id}_audio.{ext}")
+                if os.path.exists(test_path):
+                    audio_path = test_path
+                    break
+        
+        if not os.path.exists(audio_path):
+            video.status = "failed"
+            video.error_message = "Audio file not found for splitting"
+            db.commit()
+            return "Audio not found"
+            
+        # Load persisted settings
+        processing_settings = settings_util.get_settings()
+        
+        # Get channel_id for hierarchical directory structure
+        channel_id = video.channel_id if video.channel_id else None
+        
+        chunks = audio.split_audio_on_silence(
+            audio_path=audio_path,
+            output_dir=data_dir,
+            video_id=video.video_id,
+            channel_id=channel_id,
+            sample_rate=processing_settings.get("sample_rate", 16000),
+            silence_thresh=processing_settings.get("silence_thresh", -40),
+            min_silence_len=processing_settings.get("min_silence_len", 700),
+            min_chunk_len=processing_settings.get("min_chunk_len", 1000),
+            max_chunk_len=processing_settings.get("max_chunk_len", 20000)
+        )
+        
+        # Load transcript to align (simplified: for now just placeholder alignment)
+        transcript_path = os.path.join(data_dir, f"{video.video_id}_transcript.txt")
+        transcript_text = ""
+        if os.path.exists(transcript_path):
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                transcript_text = f.read()
+        transcript_text = ""
+        if os.path.exists(transcript_path):
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                transcript_text = f.read()
+
+        valid_chunks_count = 0
+        removed_chunks_count = 0
+
+        for c_data in chunks:
+            # VAD VALIDATION
+            is_valid_speech = audio.validate_speech(c_data["file_path"])
+            
+            if not is_valid_speech:
+                # Remove file and skip DB
+                if os.path.exists(c_data["file_path"]):
+                    os.remove(c_data["file_path"])
+                removed_chunks_count += 1
+                continue
+
+            valid_chunks_count += 1
+            chunk = models.AudioChunk(
+                chunk_id=c_data["chunk_id"],
+                video_id=video.id,
+                file_path=c_data["file_path"],
+                duration=c_data["duration"],
+                start_time=c_data["start_time"],
+                end_time=c_data["end_time"],
+                transcript_text=transcript_text[:200] # Placeholder: real alignment is complex
+            )
+            db.add(chunk)
+            
+        activity_log.log_activity(db, f"Audio split into {valid_chunks_count} chunks (removed {removed_chunks_count} silence/noise chunks).", video_id=video_id)
+        video.status = "completed"
+        db.commit()
+        
+        # Automated cleanup of source files after successful processing
+        try:
+            patterns = [
+                f"{video.video_id}_audio.wav",
+                f"{video.video_id}_audio.mp4",
+                f"{video.video_id}_audio.webm",
+                f"{video.video_id}_audio.m4a",
+                f"{video.video_id}_audio.mp3"
+            ]
+            for pattern in patterns:
+                file_path = os.path.join(data_dir, pattern)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            logger.info(f"Automated cleanup: Deleted source files for video {video.video_id}")
+        except Exception as cleanup_err:
+            logger.warning(f"Automated cleanup failed for video {video.video_id}: {cleanup_err}")
+            
+    except Exception as e:
+        db.rollback()
+        if 'video' in locals() and video:
+            activity_log.log_activity(db, f"Audio splitting failed: {str(e)}", video_id=video_id, level="error")
+            video.status = "failed"
+            video.error_message = str(e)
+            db.commit()
+        return str(e)
+    finally:
+        # Final cleanup attempt in finally to ensure it runs even if commit fails
+        if 'video' in locals() and video and video.status in ["completed", "failed"]:
+            try:
+                patterns = [
+                    f"{video.video_id}_audio.wav",
+                    f"{video.video_id}_audio.mp4",
+                    f"{video.video_id}_audio.webm",
+                    f"{video.video_id}_audio.m4a",
+                    f"{video.video_id}_audio.mp3"
+                ]
+                data_dir = os.path.join(os.getcwd(), "data")
+                for pattern in patterns:
+                    file_path = os.path.join(data_dir, pattern)
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+            except Exception:
+                pass
+        db.close()
+        
+    return f"Processed chunks for video {video_id}"
+
+@celery_app.task(bind=True)
+def reprocess_long_chunks_task(self):
+    """Identify and split chunks that exceed the current max_chunk_len."""
+    db = database.SessionLocal()
+    try:
+        settings = settings_util.get_settings()
+        max_chunk_len = settings.get("max_chunk_len", 20000)
+        
+        # Find chunks longer than max_chunk_len + 1s tolerance
+        long_chunks = db.query(models.AudioChunk).filter(models.AudioChunk.duration > (max_chunk_len / 1000.0 + 1)).all()
+        
+        if not long_chunks:
+            return "No lengthy chunks found."
+            
+        activity_log.log_activity(db, f"Starting refinement for {len(long_chunks)} lengthy chunks...", level="info")
+        
+        processed_ids = []
+        for chunk in long_chunks:
+            video_id = chunk.video.video_id
+            old_file_path = chunk.file_path
+            old_transcript = chunk.transcript_text
+            
+            # Split this specific chunk - filter settings to only allowed kwargs
+            allowed_keys = ['sample_rate', 'silence_thresh', 'min_silence_len', 'min_chunk_len', 'max_chunk_len']
+            split_kwargs = {k: v for k, v in settings.items() if k in allowed_keys}
+            
+            # Get channel_id for hierarchical directory structure
+            channel_id = chunk.video.channel_id if chunk.video.channel_id else None
+            
+            # Use base data directory - split_audio_on_silence will create the proper structure
+            data_dir = os.path.join(os.getcwd(), "data")
+            
+            new_sub_chunks = audio.split_audio_on_silence(
+                audio_path=old_file_path,
+                output_dir=data_dir,
+                video_id=f"{chunk.chunk_id}_ref", # Ensure unique prefix
+                channel_id=channel_id,
+                **split_kwargs
+            )
+            
+            if new_sub_chunks:
+                # Add new sub-chunks
+                for i, c_data in enumerate(new_sub_chunks):
+                    new_chunk = models.AudioChunk(
+                        chunk_id=c_data["chunk_id"],
+                        video_id=chunk.video_id,
+                        file_path=c_data["file_path"],
+                        duration=c_data["duration"],
+                        start_time=chunk.start_time + c_data["start_time"], # Relative offset
+                        end_time=chunk.start_time + c_data["end_time"],     # Relative offset
+                        transcript_text=old_transcript # Inherit transcript fragment
+                    )
+                    db.add(new_chunk)
+                
+                # Mark old chunk for deletion
+                db.delete(chunk)
+                # Remove old file
+                if os.path.exists(old_file_path):
+                    os.remove(old_file_path)
+                
+                processed_ids.append(chunk.chunk_id)
+                db.commit()
+                
+        activity_log.log_activity(db, f"Chunk refinement completed. Re-split {len(processed_ids)} giant chunks.", level="success")
+        return f"Refined {len(processed_ids)} chunks."
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error in reprocess_long_chunks: {e}")
+        activity_log.log_activity(db, f"Chunk refinement failed: {str(e)}", level="error")
+        return str(e)
+    finally:
+        db.close()
+
+@celery_app.task(bind=True)
+def refine_vad_task(self, video_id: int):
+    """Refine existing chunks using VAD."""
+    db = database.SessionLocal()
+    try:
+        video = db.query(models.Video).filter(models.Video.id == video_id).first()
+        if not video:
+            return "Video not found"
+            
+        activity_log.log_activity(db, "Starting VAD refinement...", video_id=video_id)
+        
+        chunks = db.query(models.AudioChunk).filter(models.AudioChunk.video_id == video.id).all()
+        removed_count = 0
+        total_count = len(chunks)
+        
+        for chunk in chunks:
+            if not os.path.exists(chunk.file_path):
+                # If file missing, remove from DB anyway
+                db.delete(chunk)
+                continue
+                
+            is_valid = audio.validate_speech(chunk.file_path)
+            if not is_valid:
+                # Remove file and DB entry
+                try:
+                    os.remove(chunk.file_path)
+                except Exception:
+                    pass
+                db.delete(chunk)
+                removed_count += 1
+        
+        db.commit()
+        activity_log.log_activity(db, f"VAD Verification completed. Removed {removed_count}/{total_count} chunks.", video_id=video_id, level="success")
+        return f"Removed {removed_count} chunks"
+        
+    except Exception as e:
+        db.rollback()
+        activity_log.log_activity(db, f"VAD refinement failed: {str(e)}", video_id=video_id, level="error")
+        return str(e)
+    finally:
+        db.close()
