@@ -1,9 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { triggerExport, getJobs } from '../api';
-import { Download, Share2, CheckCircle, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { triggerExport, getJobs, getChannels } from '../api';
+import { Download, Share2, CheckCircle, RefreshCw, Layers, Edit3 } from 'lucide-react';
 
 const Export = () => {
     const [jobs, setJobs] = useState<any[]>([]);
+    const [channels, setChannels] = useState<any[]>([]);
+    const [selectedChannels, setSelectedChannels] = useState<number[]>([]);
+    const [customNames, setCustomNames] = useState<{ [key: number]: string }>({});
     const [repoId, setRepoId] = useState('');
     const [token, setToken] = useState('');
     const [isPrivate, setIsPrivate] = useState(true);
@@ -11,6 +14,7 @@ const Export = () => {
 
     useEffect(() => {
         loadJobs();
+        loadChannels();
         const interval = setInterval(loadJobs, 5000);
         return () => clearInterval(interval);
     }, []);
@@ -21,13 +25,65 @@ const Export = () => {
         });
     };
 
+    const loadChannels = () => {
+        getChannels().then(data => {
+            setChannels(data);
+            // Default to selecting all channels
+            setSelectedChannels(data.map((c: any) => c.id));
+        });
+    };
+
+    const toggleChannel = (id: number) => {
+        if (selectedChannels.includes(id)) {
+            setSelectedChannels(selectedChannels.filter(c => c !== id));
+        } else {
+            setSelectedChannels([...selectedChannels, id]);
+        }
+    };
+
+    const handleNameChange = (id: number, name: string) => {
+        setCustomNames({
+            ...customNames,
+            [id]: name
+        });
+    };
+
+    const handleSelectAll = () => {
+        if (selectedChannels.length === channels.length) {
+            setSelectedChannels([]);
+        } else {
+            setSelectedChannels(channels.map(c => c.id));
+        }
+    };
+
     const handleExport = async () => {
+        if (selectedChannels.length === 0) {
+            alert("Please select at least one channel to export.");
+            return;
+        }
+
         setLoading(true);
         try {
-            await triggerExport({ repo_id: repoId, hf_token: token, private: isPrivate });
+            // Convert customNames keys to strings for API
+            const channelNamesStr: { [key: string]: string } = {};
+            selectedChannels.forEach(id => {
+                if (customNames[id]) {
+                    channelNamesStr[id.toString()] = customNames[id];
+                }
+            });
+
+            await triggerExport({
+                repo_id: repoId,
+                hf_token: token,
+                private: isPrivate,
+                channel_ids: selectedChannels,
+                channel_names: channelNamesStr
+            });
             loadJobs();
-        } catch (err) {
+            alert("Export job started!");
+        } catch (err: any) {
             console.error(err);
+            alert("Failed to start export: " + (err.response?.data?.detail || err.message));
         } finally {
             setLoading(false);
         }
@@ -41,6 +97,70 @@ const Export = () => {
                 <div className="card">
                     <h3 style={{ marginBottom: '1.5rem' }}>Dataset Configuration</h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+                        {/* Channel Selection */}
+                        <div style={{ marginBottom: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '1rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                                <label style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <Layers size={16} /> Select Channels ({selectedChannels.length}/{channels.length})
+                                </label>
+                                <button
+                                    className="btn"
+                                    style={{ fontSize: '0.8rem', padding: '0.2rem 0.5rem', height: 'auto' }}
+                                    onClick={handleSelectAll}
+                                >
+                                    {selectedChannels.length === channels.length ? 'Deselect All' : 'Select All'}
+                                </button>
+                            </div>
+                            <div style={{
+                                maxHeight: '150px',
+                                overflowY: 'auto',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.5rem',
+                                paddingRight: '0.5rem'
+                            }}>
+                                {channels.map(channel => (
+                                    <div key={channel.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', justifyContent: 'space-between' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem', flex: 1, overflow: 'hidden' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={selectedChannels.includes(channel.id)}
+                                                onChange={() => toggleChannel(channel.id)}
+                                            />
+                                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {channel.name || channel.url}
+                                            </span>
+                                        </label>
+
+                                        {/* Custom Name Input */}
+                                        {selectedChannels.includes(channel.id) && (
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                <Edit3 size={14} color="var(--text-secondary)" />
+                                                <input
+                                                    type="text"
+                                                    placeholder="Subset Name (optional)"
+                                                    value={customNames[channel.id] || ''}
+                                                    onChange={(e) => handleNameChange(channel.id, e.target.value)}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    style={{
+                                                        padding: '0.2rem 0.4rem',
+                                                        fontSize: '0.8rem',
+                                                        borderRadius: 'var(--radius-sm)',
+                                                        border: '1px solid var(--border)',
+                                                        background: 'var(--bg-main)',
+                                                        color: 'white',
+                                                        width: '140px'
+                                                    }}
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                                {channels.length === 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>No channels found.</span>}
+                            </div>
+                        </div>
+
                         <input
                             type="text"
                             placeholder="Repo ID (e.g., username/egyptian-asr)"
@@ -63,7 +183,7 @@ const Export = () => {
                             />
                             Private Dataset
                         </label>
-                        <button className="btn btn-primary" onClick={handleExport} disabled={loading}>
+                        <button className="btn btn-primary" onClick={handleExport} disabled={loading || selectedChannels.length === 0}>
                             {loading ? <RefreshCw size={18} className="spin" /> : <Share2 size={18} />}
                             Generate & Push to Hub
                         </button>

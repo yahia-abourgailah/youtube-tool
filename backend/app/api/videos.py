@@ -5,6 +5,9 @@ from typing import List, Optional
 from .. import models, schemas, database
 from ..tasks.download import download_video_task
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -63,34 +66,39 @@ def read_videos(
 
 @router.post("/retry-all")
 def retry_all_videos(db: Session = Depends(database.get_db)):
-    videos = db.query(models.Video).all()
+    # Rerun everything that isn't currently active (downloading or processing)
+    # This now correctly includes 'pending' to allow clearing stuck tasks.
+    videos = db.query(models.Video).filter(models.Video.status.notin_(["downloading", "processing"])).all()
     triggered_count = 0
     for video in videos:
-        # Only rerun if not already active to avoid duplicate tasks and UNIQUE constraint failures
-        if video.status not in ["pending", "downloading", "processing"]:
-            video.status = "pending"
-            video.retry_count = 0
-            task = download_video_task.delay(video.id)
-            video.celery_task_id = task.id
-            triggered_count += 1
+        video.status = "pending"
+        video.retry_count = 0
+        task = download_video_task.apply_async(args=[video.id])
+        video.celery_task_id = task.id
+        triggered_count += 1
     
     db.commit()
     return {"message": f"Retry triggered for {triggered_count} videos"}
 
 @router.post("/retry-failed")
 def retry_failed_videos(db: Session = Depends(database.get_db)):
-    videos = db.query(models.Video).filter(models.Video.status == "failed").all()
+    # Support retrying both failed and pending videos (as promised in the UI)
+    videos_query = db.query(models.Video).filter(models.Video.status.in_(["failed", "pending"]))
+    videos = videos_query.all()
+    count_in_db = videos_query.count()
+    logger.info(f"Retry failed/pending: Found {len(videos)} videos in list, {count_in_db} via count()")
+    
     triggered_count = 0
     for video in videos:
-        # Double check status hasn't changed since query
-        if video.status == "failed":
-            video.status = "pending"
-            video.retry_count = 0
-            task = download_video_task.delay(video.id)
-            video.celery_task_id = task.id
-            triggered_count += 1
+        video.status = "pending"
+        video.retry_count = 0
+        task = download_video_task.delay(video.id)
+        video.celery_task_id = task.id
+        triggered_count += 1
+        logger.info(f"Completed retrying video {video.id}")
     
     db.commit()
+    logger.info(f"Retry triggered for {triggered_count} videos")
     return {"message": f"Retry triggered for {triggered_count} videos"}
 
 @router.post("/{video_id}/retry")
@@ -150,8 +158,6 @@ def refine_vad_video(video_id: int, db: Session = Depends(database.get_db)):
     
     return {"message": "VAD refinement triggered", "task_id": task.id}
 
-    db.commit()
-    return {"message": f"Retry triggered for {triggered_count} videos"}
 
 @router.post("/cleanup")
 def cleanup_storage(db: Session = Depends(database.get_db)):

@@ -8,20 +8,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 @celery_app.task(bind=True)
-def export_dataset_task(self, job_id: int, repo_id: Optional[str] = None, hf_token: Optional[str] = None, private: bool = True):
-    """Export all processed chunks to a HuggingFace dataset with channel-based subsets."""
+def export_dataset_task(self, job_id: int, repo_id: Optional[str] = None, hf_token: Optional[str] = None, private: bool = True, channel_ids: Optional[list[int]] = None, channel_names: Optional[dict[str, str]] = None):
+    """Export processed chunks to a HuggingFace dataset with channel-based subsets."""
     db = database.SessionLocal()
     try:
         job = db.query(models.Job).filter(models.Job.id == job_id).first()
         if not job:
             return "Job not found"
         
-        activity_log.log_activity(db, f"Starting dataset export with channel-based subsets...", level="info")
+        activity_log.log_activity(db, f"Starting dataset export...", level="info")
         job.status = "processing"
         db.commit()
     
-        # Get all channels with their chunks
-        channels = db.query(models.Channel).all()
+        # Get channels
+        query = db.query(models.Channel)
+        if channel_ids:
+            query = query.filter(models.Channel.id.in_(channel_ids))
+            
+        channels = query.all()
         
         if not channels:
             raise Exception("No channels found in database")
@@ -41,7 +45,20 @@ def export_dataset_task(self, job_id: int, repo_id: Optional[str] = None, hf_tok
                 logger.warning(f"No chunks found for channel: {channel.name or channel.url}")
                 continue
             
+            # Determine folder name for channel subset
             channel_name = channel.name or f"channel_{channel.id}"
+            
+            # Override with custom name if provided
+            if channel_names and str(channel.id) in channel_names:
+                custom_name = channel_names[str(channel.id)].strip()
+                if custom_name:
+                    import re
+                    # Sanitize folder name: remove special chars, replace spaces with underscores, lower case
+                    # Allow alphanumeric, underscore, hyphen
+                    custom_name = re.sub(r'[^a-zA-Z0-9_\-]', '', custom_name.replace(' ', '_'))
+                    if custom_name:
+                        channel_name = custom_name
+            
             chunks_data = []
             
             for chunk in chunks:

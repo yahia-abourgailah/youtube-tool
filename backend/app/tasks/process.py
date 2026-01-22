@@ -6,9 +6,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, loglevel="INFO", time_limit=65, soft_time_limit=60)
 def split_audio_task(self, video_id: int):
     """Split video audio into chunks based on silence."""
+    pid = os.getpid()
+    logger.info(f"[PID {pid}] --- split_audio_task STARTED for video_id: {video_id} ---")
     db = database.SessionLocal()
     try:
         video = db.query(models.Video).filter(models.Video.id == video_id).first()
@@ -22,6 +24,15 @@ def split_audio_task(self, video_id: int):
         db.commit()
     
         base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+        logger.info(f"Checking data path: {base_data_dir}")
+        if not os.path.exists(base_data_dir):
+            error_msg = f"Data path not found: {base_data_dir}. Is external drive mounted?"
+            logger.error(error_msg)
+            video.status = "failed"
+            video.error_message = error_msg
+            db.commit()
+            return error_msg
+            
         data_dir = os.path.join(base_data_dir, "channels", str(video.channel_id), "videos", str(video.video_id))
         audio_path = os.path.join(data_dir, f"{video.video_id}_audio.wav")
         if not os.path.exists(audio_path):
@@ -44,7 +55,8 @@ def split_audio_task(self, video_id: int):
         # Get channel_id for hierarchical directory structure
         channel_id = video.channel_id if video.channel_id else None
         
-        chunks = audio.split_audio_on_silence(
+        logger.info(f"Calling audio.split_audio_on_vad for video {video.video_id}")
+        chunks = audio.split_audio_on_vad(
             audio_path=audio_path,
             output_dir=base_data_dir,
             video_id=video.video_id,
@@ -57,30 +69,18 @@ def split_audio_task(self, video_id: int):
         )
         
         # Load transcript to align (simplified: for now just placeholder alignment)
-        transcript_path = os.path.join(data_dir, f"{video.video_id}_transcript.txt")
+        # transcript_path = os.path.join(data_dir, f"{video.video_id}_transcript.txt")
         transcript_text = ""
-        if os.path.exists(transcript_path):
-            with open(transcript_path, "r", encoding="utf-8") as f:
-                transcript_text = f.read()
-        transcript_text = ""
-        if os.path.exists(transcript_path):
-            with open(transcript_path, "r", encoding="utf-8") as f:
-                transcript_text = f.read()
+        # logger.info(f"Attempting to load transcript from: {transcript_path}")
+        # if os.path.exists(transcript_path):
+        #     with open(transcript_path, "r", encoding="utf-8") as f:
+        #         transcript_text = f.read()
+        #     logger.info(f"Transcript loaded for video {video.video_id}. Length: {len(transcript_text)} characters.")
+        # else:
+        #     logger.warning(f"Transcript file not found for video {video.video_id} at {transcript_path}. Proceeding without transcript.")
 
         valid_chunks_count = 0
-        removed_chunks_count = 0
-
         for c_data in chunks:
-            # VAD VALIDATION
-            is_valid_speech = audio.validate_speech(c_data["file_path"])
-            
-            if not is_valid_speech:
-                # Remove file and skip DB
-                if os.path.exists(c_data["file_path"]):
-                    os.remove(c_data["file_path"])
-                removed_chunks_count += 1
-                continue
-
             valid_chunks_count += 1
             chunk = models.AudioChunk(
                 chunk_id=c_data["chunk_id"],
@@ -89,11 +89,11 @@ def split_audio_task(self, video_id: int):
                 duration=c_data["duration"],
                 start_time=c_data["start_time"],
                 end_time=c_data["end_time"],
-                transcript_text=transcript_text[:200] # Placeholder: real alignment is complex
+                transcript_text=""
             )
             db.add(chunk)
             
-        activity_log.log_activity(db, f"Audio split into {valid_chunks_count} chunks (removed {removed_chunks_count} silence/noise chunks).", video_id=video_id)
+        activity_log.log_activity(db, f"Audio split into {valid_chunks_count} VAD-verified chunks.", video_id=video_id)
         video.status = "completed"
         db.commit()
         
@@ -113,6 +113,8 @@ def split_audio_task(self, video_id: int):
             logger.info(f"Automated cleanup: Deleted source files for video {video.video_id}")
         except Exception as cleanup_err:
             logger.warning(f"Automated cleanup failed for video {video.video_id}: {cleanup_err}")
+            
+        logger.info(f"[PID {pid}] --- split_audio_task FINISHED for video_id: {video_id} ---")
             
     except Exception as e:
         db.rollback()
@@ -140,12 +142,14 @@ def split_audio_task(self, video_id: int):
                     if os.path.exists(file_path):
                         os.remove(file_path)
             except Exception:
-                pass
+                db.close()
+                logger.error(f"Failed to cleanup source files for video {video_id}")
+                raise Exception("Failed to cleanup source files for video {video_id}")
         db.close()
         
     return f"Processed chunks for video {video_id}"
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, loglevel="INFO", time_limit=65, soft_time_limit=60)
 def reprocess_long_chunks_task(self):
     """Identify and split chunks that exceed the current max_chunk_len."""
     db = database.SessionLocal()
@@ -176,7 +180,7 @@ def reprocess_long_chunks_task(self):
             
             base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
             
-            new_sub_chunks = audio.split_audio_on_silence(
+            new_sub_chunks = audio.split_audio_on_vad(
                 audio_path=old_file_path,
                 output_dir=base_data_dir,
                 video_id=f"{chunk.chunk_id}_ref", # Ensure unique prefix
@@ -208,19 +212,23 @@ def reprocess_long_chunks_task(self):
                 db.commit()
                 
         activity_log.log_activity(db, f"Chunk refinement completed. Re-split {len(processed_ids)} giant chunks.", level="success")
+        
         return f"Refined {len(processed_ids)} chunks."
         
     except Exception as e:
         db.rollback()
         logger.error(f"Error in reprocess_long_chunks: {e}")
         activity_log.log_activity(db, f"Chunk refinement failed: {str(e)}", level="error")
-        return str(e)
-    finally:
         db.close()
+        raise Exception(str(e))
+    db.close()
+    return f"Refined {len(processed_ids)} chunks."
 
-@celery_app.task(bind=True)
+@celery_app.task(bind=True, loglevel="INFO", time_limit=65, soft_time_limit=60)
 def refine_vad_task(self, video_id: int):
     """Refine existing chunks using VAD."""
+    pid = os.getpid()
+    logger.info(f"[PID {pid}] --- refine_vad_task STARTED for video_id: {video_id} ---")
     db = database.SessionLocal()
     try:
         video = db.query(models.Video).filter(models.Video.id == video_id).first()
@@ -251,11 +259,12 @@ def refine_vad_task(self, video_id: int):
         
         db.commit()
         activity_log.log_activity(db, f"VAD Verification completed. Removed {removed_count}/{total_count} chunks.", video_id=video_id, level="success")
+        logger.info(f"[PID {pid}] --- refine_vad_task FINISHED for video_id: {video_id} ---")
         return f"Removed {removed_count} chunks"
-        
     except Exception as e:
         db.rollback()
         activity_log.log_activity(db, f"VAD refinement failed: {str(e)}", video_id=video_id, level="error")
-        return str(e)
-    finally:
         db.close()
+        raise Exception(str(e))
+
+    return f"Removed {removed_count} chunks"

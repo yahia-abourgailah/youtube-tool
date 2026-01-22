@@ -16,7 +16,7 @@ def trigger_export(
     db.commit()
     db.refresh(job)
     
-    task = export_dataset_task.delay(job.id, request.repo_id, request.hf_token, request.private)
+    task = export_dataset_task.delay(job.id, request.repo_id, request.hf_token, request.private, request.channel_ids, request.channel_names)
     job.celery_task_id = task.id
     db.commit()
     

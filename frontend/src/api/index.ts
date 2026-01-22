@@ -38,4 +38,6 @@ export const updateSettings = (data: any) => api.post('/settings/', data).then(r
 
 export const triggerExport = (data?: any) => api.post('/export/', data).then(res => res.data);
 
+export const triggerTranscription = (data: any) => api.post('/transcribe/', data).then(res => res.data);
+
 export default api;

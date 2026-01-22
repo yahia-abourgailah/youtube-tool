@@ -4,6 +4,14 @@ from sqlalchemy.orm import Session
 from . import models, schemas, database
 from .api import channels, videos, chunks, jobs, export, logs, settings
 import os
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Egyptian ASR Dataset Builder")
 
@@ -26,6 +34,8 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])
 app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+from .api import transcribe
+app.include_router(transcribe.router, prefix="/api/transcribe", tags=["transcribe"])
 
 @app.get("/")
 async def root():

@@ -13,6 +13,12 @@ class ExportRequest(BaseModel):
     repo_id: Optional[str] = None
     hf_token: Optional[str] = None
     private: bool = True
+    channel_ids: Optional[List[int]] = None
+    channel_names: Optional[dict[str, str]] = None
+
+class TranscribeRequest(BaseModel):
+    channel_ids: List[int]
+    force_retranscribe: bool = False
 
 class Channel(ChannelBase):
     id: int

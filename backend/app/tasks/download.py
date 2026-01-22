@@ -3,6 +3,8 @@ from ..celery_app import celery_app
 from .. import models, database
 from ..utils import youtube, logging as activity_log, slack
 import logging
+import urllib.error
+from pytubefix.exceptions import VideoUnavailable, BotDetection
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,49 @@ def download_video_task(self, video_id: int):
         
     except Exception as e:
         db.rollback()
+        
+        # Check for critical errors that require system pause
+        error_str = str(e)
+        critical_error = False
+        pause_reason = ""
+
+        # Bot Detection
+        if isinstance(e, BotDetection) or "bot" in error_str.lower() and "detected" in error_str.lower():
+            critical_error = True
+            pause_reason = "YouTube Bot Detection"
+        
+        # SSL / Network blocking
+        elif isinstance(e, urllib.error.URLError) and ("_ssl.c" in error_str or "EOF" in error_str):
+            critical_error = True
+            pause_reason = "SSL/Network Block (Possible IP Ban)"
+
+        if critical_error:
+            logger.critical(f"CRITICAL ERROR DETECTED: {pause_reason}. Pausing system.")
+            try:
+                # Pause all pending videos
+                db.query(models.Video).filter(models.Video.status == "pending").update({"status": "failed"})
+                db.commit()
+                
+                # Notify Slack immediately
+                slack.notify_slack(
+                    f"🛑 *SYSTEM PAUSED AUTOMATICALLY*\n"
+                    f"Reason: {pause_reason}\n"
+                    f"Video: {video_id}\n"
+                    f"Error: {error_str}\n"
+                    f"All pending videos have been paused to prevent IP bans."
+                )
+                
+                # Mark current video as failed immediately, do not retry
+                if 'video' in locals() and video:
+                     video.status = "failed"
+                     video.error_message = f"System Paused: {pause_reason}"
+                     db.commit()
+                
+                return f"System Paused: {pause_reason}"
+                
+            except Exception as pause_err:
+                logger.error(f"Failed to execute system pause: {pause_err}")
+
         # Use local video_id variable for logging if video object is detached
         logger.error(f"Error downloading video {video_id}: {e}")
         # Re-query inside the error handler if we need to update status, 
