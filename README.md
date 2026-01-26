@@ -5,21 +5,26 @@ A web application for creating large-scale Egyptian Arabic ASR datasets from You
 ## Features
 - **Channel Monitoring**: Automatically fetch all videos from specified YouTube channels.
 - **Audio Extraction**: Download high-quality audio using `pytubefix`.
-- **Transcript Alignment**: Fetch Arabic captions (manual or auto-generated).
-- **Intelligent Splitting**: Silence-based audio splitting using `pydub`.
+- **AI Transcription**: High-accuracy Egyptian Arabic transcription using **Google Gemini 2.0 Flash**.
+- **VAD Filtering**: Intelligent **Voice Activity Detection** to remove non-speech chunks.
+- **Transcript Alignment**: Fetch existing Arabic captions (manual or auto-generated) as a fallback.
+- **Intelligent Splitting**: Silence-based audio splitting using `pydub` and VAD.
+- **Slack Notifications**: Real-time alerts for system status, errors, and daily summaries.
 - **Dataset Export**: Create HuggingFace-compatible datasets (Arrow/Parquet).
 - **Modern UI**: Dark-themed dashboard with real-time progress tracking.
 
 ## Technical Stack
-- **Backend**: FastAPI, SQLAlchemy (SQLite), Celery, Redis.
+- **Backend**: FastAPI, SQLAlchemy (**MySQL**), Celery, Redis.
 - **Frontend**: React, TypeScript, Vite, Vanilla CSS.
-- **Processing**: Pydub, Librosa, Pytubefix.
+- **Processing**: Pydub, Librosa, Pytubefix, Google Gemini API.
 
 ## Setup
 
 ### Prerequisites
 - Docker and Docker Compose
 - HuggingFace Token (optional, for Hub export)
+- Google Gemini API Key (for transcription)
+- Slack Webhook URL (optional, for notifications)
 
 ### Installation
 1. Clone the repository.
@@ -27,7 +32,11 @@ A web application for creating large-scale Egyptian Arabic ASR datasets from You
    ```bash
    cp .env.example .env
    ```
-3. Start the application:
+3. Update `.env` with your credentials:
+   - `GEMINI_API_KEY`: Your Google Gemini API key.
+   - `SLACK_WEBHOOK_URL`: Your Slack webhook URL.
+   - `DATABASE_URL`: Your MySQL connection string (e.g., `mysql+pymysql://user:password@localhost/dbname`).
+4. Start the application:
    ```bash
    docker-compose up --build
    ```
@@ -37,6 +46,7 @@ A web application for creating large-scale Egyptian Arabic ASR datasets from You
 - Upload a `.txt` file with channel URLs in the "Channels" tab.
 - Monitor progress in the "Videos" tab.
 - Browse and preview chunks in the "Chunks" tab.
+- Use the "Transcribe" feature to generate accurate text for your chunks.
 - Export your dataset in the "Export" tab.
 
 ### Local Setup (Without Docker)
@@ -46,6 +56,7 @@ If you prefer to run the application without Docker, follow these steps:
 #### 1. Prerequisites
 - **Python 3.10+**: Install from [python.org](https://www.python.org/).
 - **Node.js 20+**: Install from [nodejs.org](https://nodejs.org/).
+- **MySQL Server**: Recommended for production/large datasets.
 - **Redis Server**: Required for Celery. 
   - Mac: `brew install redis`
   - Linux: `sudo apt install redis-server`
@@ -69,11 +80,11 @@ If you prefer to run the application without Docker, follow these steps:
 4. Start the Celery worker (in a separate terminal, ensure REDIS_URL is set):
    ```bash
    export REDIS_URL="redis://localhost:6379/0"
+   # Make sure your .env is loaded or variables are set
    uv run celery -A app.celery_app worker --loglevel=info
    ```
-5. Start the FastAPI server (ensure REDIS_URL is set):
+5. Start the FastAPI server:
    ```bash
-   export REDIS_URL="redis://localhost:6379/0"
    uv run uvicorn app.main:app --reload
    ```
 
@@ -92,10 +103,10 @@ If you prefer to run the application without Docker, follow these steps:
    ```
 
 ## Project Structure
-- `backend/`: FastAPI application and Celery tasks.
+- `backend/`: FastAPI application, Celery tasks, and Gemini integration.
 - `frontend/`: React application.
 - `data/`: Local storage for audio and transcripts (ignored by git).
 - `logs/`: Error logs (ignored by git).
 
 ## Database Migration
-To migrate from SQLite to PostgreSQL, update the `DATABASE_URL` in `.env` and run migrations if using Alembic.
+To use MySQL, ensure `DATABASE_URL` in `.env` is set to a MySQL connection string (e.g., `mysql+pymysql://...`). The application will verify the connection on startup.
