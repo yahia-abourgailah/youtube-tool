@@ -47,7 +47,9 @@ def split_audio_on_vad(
     silence_thresh: int = -40,
     min_chunk_len: int = 1000,
     max_chunk_len: int = 20000,
-    sample_rate: int = 16000
+    sample_rate: int = 16000,
+    vad_threshold: float = 0.25,
+    min_speech_duration_ms: int = 250
 ) -> List[Dict[str, Any]]:
     """Split audio into chunks based on VAD speech detection."""
     pid = os.getpid()
@@ -75,8 +77,8 @@ def split_audio_on_vad(
                 wav,
                 model,
                 sampling_rate=sample_rate,
-                threshold=0.25, # Lower threshold to be more sensitive
-                min_speech_duration_ms=250,
+                threshold=vad_threshold, # Dynamic threshold
+                min_speech_duration_ms=min_speech_duration_ms,
                 min_silence_duration_ms=min_silence_len
             )
         logger.info(f"VAD completed, found {len(speech_timestamps)} segments.")

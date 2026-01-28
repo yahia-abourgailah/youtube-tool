@@ -86,6 +86,13 @@ class Settings(BaseModel):
     min_chunk_len: int = 1000
     max_chunk_len: int = 20000
     retry_count: int = 3
+    transcription_prompt: str = """Transcribe this audio file accurately in Egyptian Arabic. 
+- Use Egyptian dialect spelling (Ammiya).
+- Don't convert to formal Arabic.
+- Use punctuation appropriately based on the audio.
+- Only provide the transcribed text without additional commentary."""
+    vad_threshold: float = 0.25
+    min_speech_duration_ms: int = 250
 
 class ActivityLogBase(BaseModel):
     video_id: Optional[int] = None

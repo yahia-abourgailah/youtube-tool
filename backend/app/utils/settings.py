@@ -11,7 +11,14 @@ DEFAULT_SETTINGS = {
     "min_silence_len": 700,
     "min_chunk_len": 5000,
     "max_chunk_len": 30000,
-    "retry_count": 3
+    "retry_count": 3,
+    "transcription_prompt": """Transcribe this audio file accurately in Egyptian Arabic. 
+- Use Egyptian dialect spelling (Ammiya).
+- Don't convert to formal Arabic.
+- Use punctuation appropriately based on the audio.
+- Only provide the transcribed text without additional commentary.""",
+    "vad_threshold": 0.25,
+    "min_speech_duration_ms": 250
 }
 
 def get_settings() -> Dict[str, Any]:

@@ -9,7 +9,10 @@ const Settings = () => {
         min_silence_len: 700,
         min_chunk_len: 1, // Store as seconds for UI
         max_chunk_len: 20, // Store as seconds for UI
-        retry_count: 3
+        retry_count: 3,
+        transcription_prompt: "",
+        vad_threshold: 0.25,
+        min_speech_duration_ms: 250
     });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -28,7 +31,7 @@ const Settings = () => {
         });
     }, []);
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         setSettings(prev => ({ ...prev, [name]: parseFloat(value) }));
     };
@@ -128,6 +131,66 @@ const Settings = () => {
                                 style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-accent)', color: 'white' }}
                             />
                         </div>
+                    </div>
+
+
+
+                    <hr style={{ borderColor: 'var(--border)', margin: '1rem 0' }} />
+
+                    <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--primary)' }}>Advanced VAD Settings</h3>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>VAD Threshold (0.0 - 1.0)</label>
+                            <input
+                                name="vad_threshold"
+                                type="number"
+                                step="0.05"
+                                min="0"
+                                max="1"
+                                value={settings.vad_threshold}
+                                onChange={handleChange}
+                                style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-accent)', color: 'white' }}
+                            />
+                        </div>
+                        <div>
+                            <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Min Speech Duration (ms)</label>
+                            <input
+                                name="min_speech_duration_ms"
+                                type="number"
+                                value={settings.min_speech_duration_ms}
+                                onChange={handleChange}
+                                style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-accent)', color: 'white' }}
+                            />
+                        </div>
+                    </div>
+
+                    <hr style={{ borderColor: 'var(--border)', margin: '1rem 0' }} />
+
+                    <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--primary)' }}>Transcription</h3>
+
+                    <div>
+                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>System Prompt</label>
+                        <textarea
+                            name="transcription_prompt"
+                            value={settings.transcription_prompt}
+                            onChange={(e) => setSettings(prev => ({ ...prev, transcription_prompt: e.target.value }))}
+                            rows={6}
+                            style={{
+                                width: '100%',
+                                padding: '0.8rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--border)',
+                                background: 'var(--bg-accent)',
+                                color: 'white',
+                                fontFamily: 'monospace',
+                                lineHeight: '1.5',
+                                resize: 'vertical'
+                            }}
+                        />
+                        <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>
+                            Instructions for the AI model on how to transcribe the audio.
+                        </small>
                     </div>
 
                     <button

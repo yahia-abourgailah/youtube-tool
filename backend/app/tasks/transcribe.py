@@ -3,13 +3,13 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..celery_app import celery_app
 from .. import models, database
-from ..utils import logging as activity_log
+from ..utils import logging as activity_log, settings as settings_util
 from google import genai
 from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-def process_chunk_transcription(chunk_id: int, file_path: str, api_key: str, model_name: str) -> bool:
+def process_chunk_transcription(chunk_id: int, file_path: str, api_key: str, model_name: str, prompt: str) -> bool:
     """
     Helper function to transcribe a single chunk.
     Creates its own DB session to be thread-safe.
@@ -33,11 +33,7 @@ def process_chunk_transcription(chunk_id: int, file_path: str, api_key: str, mod
                     data=audio_data,
                     mime_type="audio/wav"  # تأكد من مطابقة الصيغة (audio/mpeg للـ mp3)
                 ),
-                """Transcribe this audio file accurately in Egyptian Arabic. 
-                - Use Egyptian dialect spelling (Ammiya).
-                - Don't convert to formal Arabic.
-                - Use punctuation appropriately based on the audio.
-                - Only provide the transcribed text without additional commentary."""
+                prompt
             ]
         )
         
@@ -103,12 +99,18 @@ def transcribe_channel_task(self, channel_id: int, force_retranscribe: bool = Fa
         fail_count = 0
         total = len(chunks_data)
         
+        # Get settings for prompt
+        settings = settings_util.get_settings()
+        prompt = settings.get("transcription_prompt", "Transcribe this audio file accurately in Egyptian Arabic.")
+
+        logger.info(f"Using transcription prompt: {prompt[:50]}...")
+
         # Use ThreadPoolExecutor for concurrency
         workers = 5  # As requested: 4 to 5 workers
         with ThreadPoolExecutor(max_workers=workers) as executor:
             # Map futures to chunk IDs for logging if needed
             future_to_chunk = {
-                executor.submit(process_chunk_transcription, cid, path, api_key, model_name): cid 
+                executor.submit(process_chunk_transcription, cid, path, api_key, model_name, prompt): cid 
                 for cid, path in chunks_data
             }
             

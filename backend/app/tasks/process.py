@@ -65,7 +65,9 @@ def split_audio_task(self, video_id: int):
             silence_thresh=processing_settings.get("silence_thresh", -40),
             min_silence_len=processing_settings.get("min_silence_len", 700),
             min_chunk_len=processing_settings.get("min_chunk_len", 1000),
-            max_chunk_len=processing_settings.get("max_chunk_len", 20000)
+            max_chunk_len=processing_settings.get("max_chunk_len", 20000),
+            vad_threshold=processing_settings.get("vad_threshold", 0.25),
+            min_speech_duration_ms=processing_settings.get("min_speech_duration_ms", 250)
         )
         
         # Load transcript to align (simplified: for now just placeholder alignment)
