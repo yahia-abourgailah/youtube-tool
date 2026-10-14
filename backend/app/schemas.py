@@ -17,7 +17,8 @@ class ExportRequest(BaseModel):
     channel_names: Optional[dict[str, str]] = None
 
 class TranscribeRequest(BaseModel):
-    channel_ids: List[int]
+    channel_ids: Optional[List[int]] = None
+    video_ids: Optional[List[int]] = None
     force_retranscribe: bool = False
 
 class Channel(ChannelBase):
@@ -30,8 +31,8 @@ class Channel(ChannelBase):
 
 class VideoBase(BaseModel):
     video_id: str
-    title: str
-    duration: float
+    title: Optional[str] = None
+    duration: Optional[float] = None
     upload_date: Optional[str] = None
 
 class Video(VideoBase):
@@ -62,6 +63,13 @@ class AudioChunk(AudioChunkBase):
 
     class Config:
         from_attributes = True
+
+class AudioChunkTranscriptUpdate(BaseModel):
+    transcript_text: str
+
+class AudioChunkTrimRequest(BaseModel):
+    trim_start: float  # seconds from beginning to cut
+    trim_end: float    # new end point in seconds (from chunk start)
 
 class JobBase(BaseModel):
     job_type: str

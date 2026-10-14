@@ -66,9 +66,9 @@ def read_videos(
 
 @router.post("/retry-all")
 def retry_all_videos(db: Session = Depends(database.get_db)):
-    # Rerun everything that isn't currently active (downloading or processing)
-    # This now correctly includes 'pending' to allow clearing stuck tasks.
-    videos = db.query(models.Video).filter(models.Video.status.notin_(["downloading", "processing"])).all()
+    # Only retry failed and pending videos — never re-download completed videos
+    # as that would delete their chunks and destroy transcriptions.
+    videos = db.query(models.Video).filter(models.Video.status.in_(["failed", "pending"])).all()
     triggered_count = 0
     for video in videos:
         video.status = "pending"
@@ -76,7 +76,7 @@ def retry_all_videos(db: Session = Depends(database.get_db)):
         task = download_video_task.apply_async(args=[video.id])
         video.celery_task_id = task.id
         triggered_count += 1
-    
+
     db.commit()
     return {"message": f"Retry triggered for {triggered_count} videos"}
 

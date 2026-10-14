@@ -135,7 +135,7 @@ const Videos = () => {
     };
 
     const handleRetryAll = async () => {
-        if (confirm('Are you sure you want to rerun processing for all videos?')) {
+        if (confirm('Retry all failed and pending videos? Completed videos will not be affected.')) {
             try {
                 await retryAllVideos();
                 loadVideos();

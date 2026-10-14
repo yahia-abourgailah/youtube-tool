@@ -23,6 +23,7 @@ celery_app.conf.update(
     task_track_started=True,
     task_send_sent_event=True,
     task_acks_late=True,
+    broker_transport_options={"visibility_timeout": 43200},  # 12 hours — prevents Redis re-delivering long tasks
     worker_concurrency=5,
     task_prefetch_multiplier=1
 )

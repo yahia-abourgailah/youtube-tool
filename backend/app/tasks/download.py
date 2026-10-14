@@ -56,6 +56,10 @@ def process_channel_task(self, channel_id: int):
         
         logger.info(f"Queued {new_videos_count} new videos for downloading from channel {channel_id}.")
         channel.status = "completed"
+        job = db.query(models.Job).filter(models.Job.celery_task_id == self.request.id).first()
+        if job:
+            job.status = "completed"
+            job.progress = 100
         db.commit()
         return f"Processed channel {channel_id}, found {len(videos)} videos, queued {new_videos_count} new."
     except Exception as e:
@@ -64,6 +68,9 @@ def process_channel_task(self, channel_id: int):
         if 'channel' in locals() and channel:
             activity_log.log_activity(db, f"Channel processing failed: {str(e)}", channel_id=channel_id, level="error")
             channel.status = "failed"
+            job = db.query(models.Job).filter(models.Job.celery_task_id == self.request.id).first()
+            if job:
+                job.status = "failed"
             db.commit()
             
             # Send Slack notification for channel processing errors
@@ -117,8 +124,12 @@ def download_video_task(self, video_id: int):
         }, data_dir)
         
         video.status = "processing"
+        # Mark download job as processing (split is next)
+        job = db.query(models.Job).filter(models.Job.celery_task_id == self.request.id).first()
+        if job:
+            job.status = "processing"
         db.commit()
-        
+
         # Queue audio splitting task
         from .process import split_audio_task
         task = split_audio_task.delay(video.id)
@@ -163,8 +174,11 @@ def download_video_task(self, video_id: int):
                 if 'video' in locals() and video:
                      video.status = "failed"
                      video.error_message = f"System Paused: {pause_reason}"
+                     job = db.query(models.Job).filter(models.Job.celery_task_id == self.request.id).first()
+                     if job:
+                         job.status = "failed"
                      db.commit()
-                
+
                 return f"System Paused: {pause_reason}"
                 
             except Exception as pause_err:
@@ -181,6 +195,9 @@ def download_video_task(self, video_id: int):
             if video.retry_count >= 3:
                 activity_log.log_activity(db, f"Download failed after 3 retries: {str(e)}", video_id=video_id, level="error")
                 video.status = "failed"
+                job = db.query(models.Job).filter(models.Job.celery_task_id == self.request.id).first()
+                if job:
+                    job.status = "failed"
                 
                 # Send Slack notification for final failure
                 slack.notify_slack(

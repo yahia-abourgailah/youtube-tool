@@ -29,6 +29,10 @@ export const refineVideoVad = (id: number) => api.post(`/videos/${id}/refine-vad
 export const getChunks = (params?: any) => api.get('/chunks/', { params }).then(res => res.data);
 export const reprocessChunks = () => api.post('/chunks/reprocess-lengthy').then(res => res.data);
 export const getChunkStats = () => api.get('/chunks/stats').then(res => res.data);
+export const updateChunkTranscript = (chunkId: string, transcript_text: string) => api.put(`/chunks/${chunkId}/transcript`, { transcript_text }).then(res => res.data);
+export const deleteChunk = (chunkId: string) => api.delete(`/chunks/${chunkId}`).then(res => res.data);
+export const trimChunk = (chunkId: string, trim_start: number, trim_end: number) =>
+    api.put(`/chunks/${chunkId}/trim`, { trim_start, trim_end }).then(res => res.data);
 
 export const getJobs = () => api.get('/jobs/').then(res => res.data);
 export const getVideoLogs = (id: number) => api.get(`/videos/${id}/logs`).then(res => res.data);
@@ -39,5 +43,6 @@ export const updateSettings = (data: any) => api.post('/settings/', data).then(r
 export const triggerExport = (data?: any) => api.post('/export/', data).then(res => res.data);
 
 export const triggerTranscription = (data: any) => api.post('/transcribe/', data).then(res => res.data);
+export const transcribeAllUntranscribed = () => api.post('/transcribe/all-untranscribed').then(res => res.data);
 
 export default api;

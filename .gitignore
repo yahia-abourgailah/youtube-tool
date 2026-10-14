@@ -20,3 +20,8 @@ frontend/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+backend/sql_app.db-shm
+backend/sql_app.db-wal
+finetune_channel_2/
+test_endpoints_results.json

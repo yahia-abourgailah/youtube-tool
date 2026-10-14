@@ -1,11 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 import logging
+import re
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas, database
-from ..tasks.download import process_channel_task
+from ..tasks.download import process_channel_task, download_video_task
 
 logger = logging.getLogger(__name__)
+
+def _extract_video_id(url: str):
+    """Extract video ID from a YouTube video URL. Returns None if not a video URL."""
+    match = re.search(r'(?:v=|youtu\.be/)([\w-]{11})', url)
+    return match.group(1) if match else None
 
 router = APIRouter()
 
@@ -30,25 +36,67 @@ def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(databas
 @router.post("/upload", response_model=List[schemas.Channel])
 async def upload_channels(file: UploadFile = File(...), db: Session = Depends(database.get_db)):
     content = await file.read()
-    urls = content.decode("utf-8").splitlines()
-    created_channels = []
+    urls = [u.strip() for u in content.decode("utf-8").splitlines() if u.strip()]
+
+    channel_urls = []
+    video_urls = []
     for url in urls:
-        if not url.strip():
-            continue
-        db_channel = models.Channel(url=url.strip())
+        vid_id = _extract_video_id(url)
+        if vid_id:
+            video_urls.append((url, vid_id))
+        else:
+            channel_urls.append(url)
+
+    created_channels = []
+
+    # Handle channel URLs (original behaviour)
+    for url in channel_urls:
+        db_channel = models.Channel(url=url)
         db.add(db_channel)
         try:
             db.commit()
             db.refresh(db_channel)
             task = process_channel_task.delay(db_channel.id)
             db_channel.celery_task_id = task.id
-            # Create a job record for activity log
             job = models.Job(job_type="channel_process", entity_id=str(db_channel.id), status="pending", celery_task_id=task.id)
             db.add(job)
             db.commit()
             created_channels.append(db_channel)
         except:
             db.rollback()
+
+    # Handle individual video URLs — group under a "Manual Uploads" channel
+    if video_urls:
+        manual_channel = db.query(models.Channel).filter(models.Channel.url == "manual://uploads").first()
+        if not manual_channel:
+            manual_channel = models.Channel(url="manual://uploads", name="Manual Uploads", status="completed")
+            db.add(manual_channel)
+            db.commit()
+            db.refresh(manual_channel)
+
+        for _url, vid_id in video_urls:
+            existing = db.query(models.Video).filter(models.Video.video_id == vid_id).first()
+            if existing:
+                continue
+            video = models.Video(
+                video_id=vid_id,
+                channel_id=manual_channel.id,
+                title=vid_id,
+                status="pending",
+            )
+            db.add(video)
+            try:
+                db.flush()
+                task = download_video_task.delay(video.id)
+                video.celery_task_id = task.id
+                job = models.Job(job_type="download", entity_id=str(video.id), status="pending", celery_task_id=task.id)
+                db.add(job)
+                db.commit()
+            except:
+                db.rollback()
+
+        created_channels.append(manual_channel)
+
     return created_channels
 
 @router.get("/", response_model=List[schemas.Channel])

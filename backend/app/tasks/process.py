@@ -6,7 +6,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-@celery_app.task(bind=True, loglevel="INFO", time_limit=65, soft_time_limit=60)
+@celery_app.task(bind=True, loglevel="INFO", time_limit=1800, soft_time_limit=1740)
 def split_audio_task(self, video_id: int):
     """Split video audio into chunks based on silence."""
     pid = os.getpid()
@@ -97,6 +97,13 @@ def split_audio_task(self, video_id: int):
             
         activity_log.log_activity(db, f"Audio split into {valid_chunks_count} VAD-verified chunks.", video_id=video_id)
         video.status = "completed"
+        # Mark the download job as completed
+        job = db.query(models.Job).filter(
+            models.Job.entity_id == str(video_id), models.Job.job_type == "download"
+        ).first()
+        if job:
+            job.status = "completed"
+            job.progress = 100
         db.commit()
         
         # Automated cleanup of source files after successful processing
@@ -124,6 +131,12 @@ def split_audio_task(self, video_id: int):
             activity_log.log_activity(db, f"Audio splitting failed: {str(e)}", video_id=video_id, level="error")
             video.status = "failed"
             video.error_message = str(e)
+            # Mark the download job as failed
+            job = db.query(models.Job).filter(
+                models.Job.entity_id == str(video_id), models.Job.job_type == "download"
+            ).first()
+            if job:
+                job.status = "failed"
             db.commit()
         return str(e)
     finally:
@@ -151,7 +164,7 @@ def split_audio_task(self, video_id: int):
         
     return f"Processed chunks for video {video_id}"
 
-@celery_app.task(bind=True, loglevel="INFO", time_limit=65, soft_time_limit=60)
+@celery_app.task(bind=True, loglevel="INFO", time_limit=1800, soft_time_limit=1740)
 def reprocess_long_chunks_task(self):
     """Identify and split chunks that exceed the current max_chunk_len."""
     db = database.SessionLocal()
@@ -226,7 +239,7 @@ def reprocess_long_chunks_task(self):
     db.close()
     return f"Refined {len(processed_ids)} chunks."
 
-@celery_app.task(bind=True, loglevel="INFO", time_limit=65, soft_time_limit=60)
+@celery_app.task(bind=True, loglevel="INFO", time_limit=1800, soft_time_limit=1740)
 def refine_vad_task(self, video_id: int):
     """Refine existing chunks using VAD."""
     pid = os.getpid()
