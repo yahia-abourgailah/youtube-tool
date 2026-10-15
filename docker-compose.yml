@@ -47,6 +47,7 @@ services:
       - /app/node_modules
     environment:
       - VITE_API_URL=http://app:7080
+      - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
     depends_on:
       - app
     networks:

@@ -44,6 +44,16 @@ def download_export():
         detail="No exported parquet file found. Run an export first via POST /api/export/"
     )
 
+FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def neutralize_csv_formula(value: object) -> object:
+    """Prefix string cells that spreadsheets would evaluate as formulas with a quote."""
+    if isinstance(value, str) and value.startswith(FORMULA_TRIGGER_CHARS):
+        return "'" + value
+    return value
+
+
 @router.get("/csv")
 def download_csv(video_ids: str = None, db: Session = Depends(database.get_db)):
     """Export audio chunks as CSV. Optionally filter by comma-separated video IDs (YouTube IDs)."""
@@ -70,7 +80,7 @@ def download_csv(video_ids: str = None, db: Session = Depends(database.get_db)):
     writer = csv.writer(output)
     writer.writerow(["chunk_id", "file_path", "transcript", "duration", "start_time", "end_time", "youtube_id"])
     for row in chunks:
-        writer.writerow(row)
+        writer.writerow([neutralize_csv_formula(value) for value in row])
 
     output.seek(0)
     return StreamingResponse(
