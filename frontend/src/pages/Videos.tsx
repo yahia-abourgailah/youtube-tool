@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getVideos, retryVideo, stopVideoTask, resetVideo, retryAllVideos, retryFailedVideos, cleanupStorage, getVideoLogs, refineVideoVad } from '../api';
+import { getVideos, retryVideo, stopVideoTask, resetVideo, retryAllVideos, retryFailedVideos, cleanupStorage, getVideoLogs, refineVideoVad, getSettings, deleteVideo } from '../api';
 import { RefreshCw, AlertCircle, CheckCircle, Clock, Square, RotateCcw, Play, Trash2, Filter, X, Mic } from 'lucide-react';
 
 interface Video {
@@ -29,6 +29,7 @@ const Videos = () => {
     const [selectedVideo, setSelectedVideo] = useState<any>(null);
     const [logs, setLogs] = useState<any[]>([]);
     const [search, setSearch] = useState('');
+    const [autoRetry, setAutoRetry] = useState(false);
     const pageSize = 20;
 
     useEffect(() => {
@@ -36,6 +37,10 @@ const Videos = () => {
         const interval = setInterval(loadVideos, 5000);
         return () => clearInterval(interval);
     }, [page, sortBy, sortOrder, filterStatus, search]);
+
+    useEffect(() => {
+        getSettings().then(s => setAutoRetry(!!s.auto_retry)).catch(() => {});
+    }, []);
 
     const loadVideos = () => {
         getVideos({
@@ -75,6 +80,16 @@ const Videos = () => {
     const handleRetry = async (id: number) => {
         await retryVideo(id);
         loadVideos();
+    };
+
+    const handleDelete = async (id: number, title: string) => {
+        if (!confirm(`Delete "${title}"? This removes its chunks, transcripts and audio files permanently.`)) return;
+        try {
+            await deleteVideo(id);
+            loadVideos();
+        } catch (err: any) {
+            alert(`Failed to delete video: ${err.response?.data?.detail || err.message}`);
+        }
     };
 
     const handleStop = async (id: number) => {
@@ -244,6 +259,14 @@ const Videos = () => {
                 </div>
             </div>
 
+            {autoRetry && (
+                <div className="card" style={{ marginBottom: '1rem', borderLeft: '3px solid var(--success)' }}>
+                    <strong>Automatic retries are ON.</strong>{' '}
+                    Failed videos and orphaned pending videos are re-queued periodically. Videos you stopped
+                    or that hit bot detection are skipped. You can turn this off in Settings.
+                </div>
+            )}
+
             <div className="card">
                 {loading && videos.length === 0 ? <p>Loading videos...</p> : (
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -293,11 +316,11 @@ const Videos = () => {
                                                 <button className="btn" style={{ padding: '0.3rem', color: 'var(--danger)' }} onClick={() => handleStop(video.id)} title="Stop">
                                                     <Square size={16} />
                                                 </button>
-                                            ) : (
+                                            ) : (video.status === 'failed' || video.status === 'pending') ? (
                                                 <button className="btn" style={{ padding: '0.3rem', color: 'var(--accent-primary)' }} onClick={() => handleRetry(video.id)} title="Start/Retry">
                                                     <RefreshCw size={16} />
                                                 </button>
-                                            )}
+                                            ) : null}
 
                                             {(video.status === 'completed' || video.status === 'failed') && (
                                                 <button className="btn" style={{ padding: '0.3rem' }} onClick={() => handleReset(video.id)} title="Reset">
@@ -313,6 +336,10 @@ const Videos = () => {
 
                                             <button className="btn" style={{ padding: '0.3rem' }} title="View Logs" onClick={() => handleViewLogs(video)}>
                                                 <AlertCircle size={16} />
+                                            </button>
+
+                                            <button className="btn" style={{ padding: '0.3rem', color: 'var(--danger)' }} title="Delete video" onClick={() => handleDelete(video.id, video.title)}>
+                                                <Trash2 size={16} />
                                             </button>
                                         </div>
                                     </td>

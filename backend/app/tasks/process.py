@@ -1,10 +1,27 @@
 import os
 from ..celery_app import celery_app
 from .. import models, database
-from ..utils import audio, logging as activity_log, settings as settings_util
+from ..utils import audio, logging as activity_log, settings as settings_util, paths
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _fail_active_download_job(db, video_id: int) -> None:
+    """Mark the newest active download job for a video as failed."""
+    job = db.query(models.Job).filter(
+        models.Job.entity_id == str(video_id),
+        models.Job.job_type == "download",
+        models.Job.status.in_(["pending", "processing"]),
+    ).order_by(models.Job.id.desc()).first()
+    if not job:
+        job = db.query(models.Job).filter(
+            models.Job.entity_id == str(video_id),
+            models.Job.job_type == "download",
+        ).order_by(models.Job.id.desc()).first()
+    if job:
+        job.status = "failed"
+
 
 @celery_app.task(bind=True, loglevel="INFO", time_limit=1800, soft_time_limit=1740)
 def split_audio_task(self, video_id: int):
@@ -15,21 +32,32 @@ def split_audio_task(self, video_id: int):
     try:
         video = db.query(models.Video).filter(models.Video.id == video_id).first()
         if not video:
+            _fail_active_download_job(db, video_id)
+            db.commit()
             return "Video not found"
         
         activity_log.log_activity(db, "Starting audio splitting...", video_id=video_id)
         video.status = "processing"
         # Clear existing chunks for this video to allow clean re-chunking
+        for old_chunk in db.query(models.AudioChunk).filter(models.AudioChunk.video_id == video.id).all():
+            if old_chunk.file_path:
+                old_path = paths.resolve(old_chunk.file_path)
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+                sidecar = paths.transcript_path(old_chunk.file_path)
+                if os.path.exists(sidecar):
+                    os.remove(sidecar)
         db.query(models.AudioChunk).filter(models.AudioChunk.video_id == video.id).delete()
         db.commit()
     
-        base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+        base_data_dir = paths.data_path()
         logger.info(f"Checking data path: {base_data_dir}")
         if not os.path.exists(base_data_dir):
             error_msg = f"Data path not found: {base_data_dir}. Is external drive mounted?"
             logger.error(error_msg)
             video.status = "failed"
             video.error_message = error_msg
+            _fail_active_download_job(db, video_id)
             db.commit()
             return error_msg
             
@@ -46,6 +74,7 @@ def split_audio_task(self, video_id: int):
         if not os.path.exists(audio_path):
             video.status = "failed"
             video.error_message = "Audio file not found for splitting"
+            _fail_active_download_job(db, video_id)
             db.commit()
             return "Audio not found"
             
@@ -97,14 +126,34 @@ def split_audio_task(self, video_id: int):
             
         activity_log.log_activity(db, f"Audio split into {valid_chunks_count} VAD-verified chunks.", video_id=video_id)
         video.status = "completed"
-        # Mark the download job as completed
+        # Mark the download job as completed. There may be several download jobs
+        # for this video after retries; update the current active one, not an old one.
         job = db.query(models.Job).filter(
-            models.Job.entity_id == str(video_id), models.Job.job_type == "download"
-        ).first()
+            models.Job.entity_id == str(video_id),
+            models.Job.job_type == "download",
+            models.Job.status.in_(["pending", "processing"]),
+        ).order_by(models.Job.id.desc()).first()
         if job:
             job.status = "completed"
             job.progress = 100
         db.commit()
+
+        # Automatic transcription: queue this video as soon as its chunks exist,
+        # so download -> split -> transcribe runs without manual intervention.
+        try:
+            if valid_chunks_count and settings_util.get_settings().get("auto_transcribe", True):
+                from .transcribe import queue_video_transcription
+                task = queue_video_transcription(db, video.id)
+                if task:
+                    activity_log.log_activity(
+                        db,
+                        f"Queued automatic transcription (task {task.id}).",
+                        video_id=video_id,
+                    )
+        except Exception as queue_err:
+            # Never fail chunking because transcription could not be queued;
+            # the periodic auto-transcription sweep will pick the video up.
+            logger.warning(f"Could not queue automatic transcription for video {video_id}: {queue_err}")
         
         # Automated cleanup of source files after successful processing
         try:
@@ -131,12 +180,8 @@ def split_audio_task(self, video_id: int):
             activity_log.log_activity(db, f"Audio splitting failed: {str(e)}", video_id=video_id, level="error")
             video.status = "failed"
             video.error_message = str(e)
-            # Mark the download job as failed
-            job = db.query(models.Job).filter(
-                models.Job.entity_id == str(video_id), models.Job.job_type == "download"
-            ).first()
-            if job:
-                job.status = "failed"
+            # Mark the current active download job as failed (not an old retry).
+            _fail_active_download_job(db, video_id)
             db.commit()
         return str(e)
     finally:
@@ -150,16 +195,14 @@ def split_audio_task(self, video_id: int):
                     f"{video.video_id}_audio.m4a",
                     f"{video.video_id}_audio.mp3"
                 ]
-                base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+                base_data_dir = paths.data_path()
                 data_dir = os.path.join(base_data_dir, "channels", str(video.channel_id), "videos", str(video.video_id))
                 for pattern in patterns:
                     file_path = os.path.join(data_dir, pattern)
                     if os.path.exists(file_path):
                         os.remove(file_path)
-            except Exception:
-                db.close()
-                logger.error(f"Failed to cleanup source files for video {video_id}")
-                raise Exception("Failed to cleanup source files for video {video_id}")
+            except Exception as cleanup_err:
+                logger.warning(f"Failed to cleanup source files for video {video_id}: {cleanup_err}")
         db.close()
         
     return f"Processed chunks for video {video_id}"
@@ -185,6 +228,7 @@ def reprocess_long_chunks_task(self):
             video_id = chunk.video.video_id
             old_file_path = chunk.file_path
             old_transcript = chunk.transcript_text
+            resolved_old_path = paths.resolve(old_file_path) if old_file_path else None
             
             # Split this specific chunk - filter settings to only allowed kwargs
             allowed_keys = ['sample_rate', 'silence_thresh', 'min_silence_len', 'min_chunk_len', 'max_chunk_len']
@@ -193,10 +237,10 @@ def reprocess_long_chunks_task(self):
             # Get channel_id for hierarchical directory structure
             channel_id = chunk.video.channel_id if chunk.video.channel_id else None
             
-            base_data_dir = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+            base_data_dir = paths.data_path()
             
             new_sub_chunks = audio.split_audio_on_vad(
-                audio_path=old_file_path,
+                audio_path=resolved_old_path,
                 output_dir=base_data_dir,
                 video_id=f"{chunk.chunk_id}_ref", # Ensure unique prefix
                 channel_id=channel_id,
@@ -219,9 +263,12 @@ def reprocess_long_chunks_task(self):
                 
                 # Mark old chunk for deletion
                 db.delete(chunk)
-                # Remove old file
-                if os.path.exists(old_file_path):
-                    os.remove(old_file_path)
+                # Remove old file and its transcript sidecar
+                if resolved_old_path and os.path.exists(resolved_old_path):
+                    os.remove(resolved_old_path)
+                sidecar = paths.transcript_path(old_file_path) if old_file_path else None
+                if sidecar and os.path.exists(sidecar):
+                    os.remove(sidecar)
                 
                 processed_ids.append(chunk.chunk_id)
                 db.commit()
@@ -257,18 +304,25 @@ def refine_vad_task(self, video_id: int):
         total_count = len(chunks)
         
         for chunk in chunks:
-            if not os.path.exists(chunk.file_path):
+            resolved_path = paths.resolve(chunk.file_path) if chunk.file_path else None
+            if not resolved_path or not os.path.exists(resolved_path):
                 # If file missing, remove from DB anyway
                 db.delete(chunk)
                 continue
                 
-            is_valid = audio.validate_speech(chunk.file_path)
+            is_valid = audio.validate_speech(resolved_path)
             if not is_valid:
-                # Remove file and DB entry
+                # Remove file, sidecar and DB entry
                 try:
-                    os.remove(chunk.file_path)
+                    os.remove(resolved_path)
                 except Exception:
                     pass
+                sidecar = paths.transcript_path(chunk.file_path)
+                if os.path.exists(sidecar):
+                    try:
+                        os.remove(sidecar)
+                    except Exception:
+                        pass
                 db.delete(chunk)
                 removed_count += 1
         

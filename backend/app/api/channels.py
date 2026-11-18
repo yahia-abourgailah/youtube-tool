@@ -4,7 +4,8 @@ import re
 from sqlalchemy.orm import Session
 from typing import List
 from .. import models, schemas, database
-from ..tasks.download import process_channel_task, download_video_task
+from ..tasks.download import queue_channel_process, queue_video_download
+from ..utils import deletion
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +26,7 @@ def create_channel(channel: schemas.ChannelCreate, db: Session = Depends(databas
         db.rollback()
         raise HTTPException(status_code=400, detail="Channel already exists")
     db.refresh(db_channel)
-    task = process_channel_task.delay(db_channel.id)
-    db_channel.celery_task_id = task.id
-    # Create a job record for activity log
-    job = models.Job(job_type="channel_process", entity_id=str(db_channel.id), status="pending", celery_task_id=task.id)
-    db.add(job)
-    db.commit()
+    queue_channel_process(db, db_channel)
     return db_channel
 
 @router.post("/upload", response_model=List[schemas.Channel])
@@ -56,11 +52,7 @@ async def upload_channels(file: UploadFile = File(...), db: Session = Depends(da
         try:
             db.commit()
             db.refresh(db_channel)
-            task = process_channel_task.delay(db_channel.id)
-            db_channel.celery_task_id = task.id
-            job = models.Job(job_type="channel_process", entity_id=str(db_channel.id), status="pending", celery_task_id=task.id)
-            db.add(job)
-            db.commit()
+            queue_channel_process(db, db_channel)
             created_channels.append(db_channel)
         except:
             db.rollback()
@@ -87,11 +79,7 @@ async def upload_channels(file: UploadFile = File(...), db: Session = Depends(da
             db.add(video)
             try:
                 db.flush()
-                task = download_video_task.delay(video.id)
-                video.celery_task_id = task.id
-                job = models.Job(job_type="download", entity_id=str(video.id), status="pending", celery_task_id=task.id)
-                db.add(job)
-                db.commit()
+                queue_video_download(db, video)
             except:
                 db.rollback()
 
@@ -109,13 +97,8 @@ def trigger_process_channel(channel_id: int, db: Session = Depends(database.get_
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
     
-    task = process_channel_task.delay(channel_id)
-    channel.celery_task_id = task.id
-    # Create a job record for activity log
-    job = models.Job(job_type="channel_process", entity_id=str(channel_id), status="pending", celery_task_id=task.id)
-    db.add(job)
-    db.commit()
-    return {"message": "Processing triggered", "task_id": task.id}
+    job = queue_channel_process(db, channel)
+    return {"message": "Processing triggered", "task_id": job.celery_task_id, "job_id": job.id}
 
 @router.post("/{channel_id}/stop")
 def stop_process_channel(channel_id: int, db: Session = Depends(database.get_db)):
@@ -145,3 +128,14 @@ def reset_channel(channel_id: int, db: Session = Depends(database.get_db)):
     channel.celery_task_id = None
     db.commit()
     return {"message": "Channel reset"}
+
+
+@router.delete("/{channel_id}")
+def delete_channel(channel_id: int, db: Session = Depends(database.get_db)):
+    """Delete a channel, all its videos, chunks, jobs and files."""
+    channel = db.query(models.Channel).filter(models.Channel.id == channel_id).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Channel not found")
+    name = channel.name or channel.url
+    deletion.delete_channel(db, channel)
+    return {"message": f"Channel {name} deleted"}

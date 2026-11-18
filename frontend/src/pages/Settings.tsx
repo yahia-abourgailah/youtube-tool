@@ -10,9 +10,10 @@ const Settings = () => {
         min_chunk_len: 1, // Store as seconds for UI
         max_chunk_len: 20, // Store as seconds for UI
         retry_count: 3,
-        transcription_prompt: "",
         vad_threshold: 0.25,
-        min_speech_duration_ms: 250
+        min_speech_duration_ms: 250,
+        auto_transcribe: true,
+        auto_retry: true
     });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -167,31 +168,50 @@ const Settings = () => {
 
                     <hr style={{ borderColor: 'var(--border)', margin: '1rem 0' }} />
 
-                    <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--primary)' }}>Transcription</h3>
+                    <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--primary)' }}>Automation</h3>
 
                     <div>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>System Prompt</label>
-                        <textarea
-                            name="transcription_prompt"
-                            value={settings.transcription_prompt}
-                            onChange={(e) => setSettings(prev => ({ ...prev, transcription_prompt: e.target.value }))}
-                            rows={6}
-                            style={{
-                                width: '100%',
-                                padding: '0.8rem',
-                                borderRadius: 'var(--radius-md)',
-                                border: '1px solid var(--border)',
-                                background: 'var(--bg-accent)',
-                                color: 'white',
-                                fontFamily: 'monospace',
-                                lineHeight: '1.5',
-                                resize: 'vertical'
-                            }}
-                        />
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={settings.auto_transcribe}
+                                onChange={(e) => setSettings(prev => ({ ...prev, auto_transcribe: e.target.checked }))}
+                            />
+                            <span>Transcribe new chunks automatically</span>
+                        </label>
                         <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>
-                            Instructions for the AI model on how to transcribe the audio.
+                            Queues a video for transcription as soon as its audio is split. A periodic sweep
+                            also picks up any chunks that were missed or failed, so "transcribe all untranscribed"
+                            happens automatically.
                         </small>
                     </div>
+
+                    <div>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={settings.auto_retry}
+                                onChange={(e) => setSettings(prev => ({ ...prev, auto_retry: e.target.checked }))}
+                            />
+                            <span>Retry failed and orphaned videos automatically</span>
+                        </label>
+                        <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '0.5rem' }}>
+                            Periodically re-queues failed videos and pending videos that never got a task.
+                            Videos stopped by you and bot-detection pauses are never retried, and each video
+                            is capped at a few automatic attempts.
+                        </small>
+                    </div>
+
+                    <hr style={{ borderColor: 'var(--border)', margin: '1rem 0' }} />
+
+                    <h3 style={{ fontSize: '1.2rem', marginBottom: '1rem', color: 'var(--primary)' }}>Transcription</h3>
+
+                    <small style={{ color: 'var(--text-secondary)', display: 'block' }}>
+                        Transcription is handled by the external ASR service configured in
+                        {' '}<code>ASR_ENDPOINT</code>, <code>ASR_API_KEY</code> and
+                        {' '}<code>ASR_API_SECRET</code>. Chunking settings above control how
+                        audio is prepared before it is sent.
+                    </small>
 
                     <button
                         className="btn btn-primary"

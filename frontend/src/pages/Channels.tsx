@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Upload, Play, Square, RotateCcw } from 'lucide-react';
-import { getChannels, createChannel, uploadChannelsFile, triggerChannelProcess, stopChannelProcess, resetChannel } from '../api';
+import { Plus, Upload, Play, Square, RotateCcw, Trash2 } from 'lucide-react';
+import { getChannels, createChannel, uploadChannelsFile, triggerChannelProcess, stopChannelProcess, resetChannel, deleteChannel } from '../api';
 
 interface Channel {
     id: number;
@@ -82,6 +82,16 @@ const Channels = () => {
         } catch (err: any) {
             console.error(err);
             alert(`Failed to trigger process: ${err.response?.data?.detail || err.message}`);
+        }
+    };
+
+    const handleDelete = async (id: number, name: string) => {
+        if (!confirm(`Delete channel "${name}" and ALL of its videos, chunks and transcripts? This cannot be undone.`)) return;
+        try {
+            await deleteChannel(id);
+            loadChannels();
+        } catch (err: any) {
+            alert(`Failed to delete channel: ${err.response?.data?.detail || err.message}`);
         }
     };
 
@@ -168,6 +178,15 @@ const Channels = () => {
                                             )}
 
                                             <button className="btn" style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem' }} onClick={() => { }}>View Videos</button>
+
+                                            <button
+                                                className="btn"
+                                                style={{ fontSize: '0.8rem', padding: '0.3rem 0.6rem', color: 'var(--danger)' }}
+                                                onClick={() => handleDelete(channel.id, channel.name || channel.url)}
+                                                title="Delete channel"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>

@@ -4,6 +4,7 @@ from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from .. import models, schemas, database
+from ..utils import paths, storage
 import os
 
 from ..tasks.process import reprocess_long_chunks_task
@@ -48,10 +49,20 @@ def get_chunk_stats(db: Session = Depends(database.get_db)):
         "total_duration": float(np.sum(durations))
     }
 
+def _has_transcript():
+    return (models.AudioChunk.transcript_text != None) & (models.AudioChunk.transcript_text != "")
+
+@router.get("/counts")
+def get_chunk_counts(db: Session = Depends(database.get_db)):
+    total = db.query(models.AudioChunk).count()
+    transcribed = db.query(models.AudioChunk).filter(_has_transcript()).count()
+    return {"all": total, "transcribed": transcribed, "untranscribed": total - transcribed}
+
 @router.get("/", response_model=schemas.PaginatedChunks)
 def read_chunks(
     video_id: Optional[int] = None,
     search: Optional[str] = None,
+    transcribed: Optional[bool] = None,
     page: int = 1,
     size: int = 20,
     db: Session = Depends(database.get_db)
@@ -59,6 +70,10 @@ def read_chunks(
     query = db.query(models.AudioChunk)
     if video_id:
         query = query.filter(models.AudioChunk.video_id == video_id)
+    if transcribed is True:
+        query = query.filter(_has_transcript())
+    elif transcribed is False:
+        query = query.filter(~_has_transcript())
     if search:
         query = query.filter(
             models.AudioChunk.transcript_text.ilike(f"%{search}%")
@@ -86,15 +101,29 @@ def update_chunk_transcript(chunk_id: str, body: schemas.AudioChunkTranscriptUpd
     chunk.transcript_text = body.transcript_text
     db.commit()
     db.refresh(chunk)
+    _write_transcript_sidecar(chunk.file_path, chunk.transcript_text)
     return chunk
+
+
+def _write_transcript_sidecar(file_path: str, text: str):
+    """Keep a .txt copy of the transcript next to the audio (best effort)."""
+    if not file_path:
+        return
+    try:
+        txt_path = paths.transcript_path(file_path)
+        os.makedirs(os.path.dirname(txt_path), exist_ok=True)
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write((text or "").strip())
+    except Exception:
+        pass
+
 
 @router.delete("/{chunk_id}")
 def delete_chunk(chunk_id: str, db: Session = Depends(database.get_db)):
     chunk = db.query(models.AudioChunk).filter(models.AudioChunk.chunk_id == chunk_id).first()
     if not chunk:
         raise HTTPException(status_code=404, detail="Chunk not found")
-    if chunk.file_path and os.path.exists(chunk.file_path):
-        os.remove(chunk.file_path)
+    storage.delete_chunk_files(chunk)
     db.delete(chunk)
     db.commit()
     return {"message": "Chunk deleted"}
@@ -104,7 +133,10 @@ def trim_chunk(chunk_id: str, body: schemas.AudioChunkTrimRequest, db: Session =
     chunk = db.query(models.AudioChunk).filter(models.AudioChunk.chunk_id == chunk_id).first()
     if not chunk:
         raise HTTPException(status_code=404, detail="Chunk not found")
-    if not chunk.file_path or not os.path.exists(chunk.file_path):
+    if not chunk.file_path:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    file_path = paths.resolve(chunk.file_path)
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
 
     if not (0 <= body.trim_start < body.trim_end <= chunk.duration):
@@ -114,9 +146,9 @@ def trim_chunk(chunk_id: str, body: schemas.AudioChunkTrimRequest, db: Session =
         )
 
     from pydub import AudioSegment
-    audio = AudioSegment.from_wav(chunk.file_path)
+    audio = AudioSegment.from_wav(file_path)
     trimmed = audio[int(body.trim_start * 1000):int(body.trim_end * 1000)]
-    trimmed.export(chunk.file_path, format="wav")
+    trimmed.export(file_path, format="wav")
 
     old_duration = chunk.duration
     new_duration = body.trim_end - body.trim_start
@@ -130,10 +162,12 @@ def trim_chunk(chunk_id: str, body: schemas.AudioChunkTrimRequest, db: Session =
 @router.get("/{chunk_id}/audio")
 def get_chunk_audio(chunk_id: str, request: Request, db: Session = Depends(database.get_db)):
     chunk = db.query(models.AudioChunk).filter(models.AudioChunk.chunk_id == chunk_id).first()
-    if not chunk or not os.path.exists(chunk.file_path):
+    if not chunk or not chunk.file_path:
         raise HTTPException(status_code=404, detail="Audio file not found")
 
-    file_path = chunk.file_path
+    file_path = paths.resolve(chunk.file_path)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
     file_size = os.path.getsize(file_path)
     range_header = request.headers.get("range")
 

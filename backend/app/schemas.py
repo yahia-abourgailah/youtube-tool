@@ -5,6 +5,7 @@ from datetime import datetime
 class ChannelBase(BaseModel):
     url: str # More permissive than HttpUrl
     name: Optional[str] = None
+    speaker: Optional[str] = None
 
 class ChannelCreate(ChannelBase):
     pass
@@ -15,6 +16,9 @@ class ExportRequest(BaseModel):
     private: bool = True
     channel_ids: Optional[List[int]] = None
     channel_names: Optional[dict[str, str]] = None
+    split: bool = False
+    val_ratio: float = 0.05
+    test_ratio: float = 0.05
 
 class TranscribeRequest(BaseModel):
     channel_ids: Optional[List[int]] = None
@@ -56,6 +60,10 @@ class AudioChunkBase(BaseModel):
     start_time: float
     end_time: float
     transcript_text: str
+    asr_model: Optional[str] = None
+    asr_version: Optional[str] = None
+    confidence: Optional[float] = None
+    language: Optional[str] = None
 
 class AudioChunk(AudioChunkBase):
     id: int
@@ -94,13 +102,10 @@ class Settings(BaseModel):
     min_chunk_len: int = 1000
     max_chunk_len: int = 20000
     retry_count: int = 3
-    transcription_prompt: str = """Transcribe this audio file accurately in Egyptian Arabic. 
-- Use Egyptian dialect spelling (Ammiya).
-- Don't convert to formal Arabic.
-- Use punctuation appropriately based on the audio.
-- Only provide the transcribed text without additional commentary."""
     vad_threshold: float = 0.25
     min_speech_duration_ms: int = 250
+    auto_transcribe: bool = True
+    auto_retry: bool = True
 
 class ActivityLogBase(BaseModel):
     video_id: Optional[int] = None

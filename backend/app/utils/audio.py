@@ -100,17 +100,61 @@ def split_audio_on_vad(
         if not nonsilent_ranges:
             return []
 
+        # Speech that runs longer than max_chunk_len without a VAD-level pause is split
+        # at shorter pauses (breaths between words). We never cut inside speech: if a
+        # segment has no pause at all, it is kept whole even if it is long.
+        def split_long_segment(seg_start, seg_end):
+            seg_audio = audio[seg_start:seg_end]
+            pauses = silence.detect_silence(
+                seg_audio, min_silence_len=150, silence_thresh=seg_audio.dBFS - 16, seek_step=10
+            )
+            pieces = []
+            cursor = seg_start
+            for p_start, p_end in pauses:
+                p_start += seg_start
+                p_end += seg_start
+                if p_start - cursor < min_chunk_len or p_end >= seg_end:
+                    continue
+                pieces.append((cursor, p_start))
+                cursor = p_end
+            pieces.append((cursor, seg_end))
+            return pieces
+
+        speech_ranges = []
+        for start, end in nonsilent_ranges:
+            if end - start > max_chunk_len:
+                speech_ranges.extend(split_long_segment(start, end))
+            else:
+                speech_ranges.append((start, end))
+
+        # Group speech ranges into chunks; boundaries only ever fall in the gaps between ranges
+        import random
+        groups = []
         current_group = []
         current_group_duration = 0
-        
-        def save_chunk(group, index):
-            if not group: return
+        current_target_len = random.randint(min_chunk_len, max_chunk_len)
+        for start, end in speech_ranges:
+            seg_duration = end - start
+            if current_group and current_group_duration + seg_duration > current_target_len and current_group_duration >= min_chunk_len:
+                groups.append(current_group)
+                current_group = []
+                current_group_duration = 0
+                current_target_len = random.randint(min_chunk_len, max_chunk_len)
+            current_group.append((start, end))
+            current_group_duration += seg_duration
+        if current_group:
+            groups.append(current_group)
+
+        PAD_MS = 500
+
+        def save_chunk(group, index, prev_end, next_start):
             start_time = group[0][0]
             end_time = group[-1][1]
-            # Add more padding to prevent cut-offs
-            start_pad = max(0, start_time - 500)
-            end_pad = min(len(audio), end_time + 500)
-            
+            # Pad into the surrounding silence, but never past the middle of the gap,
+            # so neighbouring chunks never share audio
+            start_pad = max(start_time - PAD_MS, (prev_end + start_time) // 2 if prev_end is not None else 0)
+            end_pad = min(end_time + PAD_MS, (end_time + next_start) // 2 if next_start is not None else len(audio))
+
             chunk_audio = audio[start_pad:end_pad]
             chunk_id = f"{video_id}_chunk_{index}"
             file_name = f"{chunk_id}.wav"
@@ -134,52 +178,10 @@ def split_audio_on_vad(
                 "end_time": end_pad / 1000.0
             })
 
-        chunk_idx = 0
-        import random
-        
-        # Determine randomized target for the first chunk
-        current_target_len = random.randint(min_chunk_len, max_chunk_len)
-
-        for start, end in nonsilent_ranges:
-            seg_duration = end - start
-            
-            # If the segment itself is longer than current_target_len, 
-            # we must split it even without silence
-            if seg_duration > max_chunk_len:
-                if current_group:
-                    save_chunk(current_group, chunk_idx)
-                    chunk_idx += 1
-                    current_group = []
-                    current_group_duration = 0
-                
-                # Split this long segment into sub-chunks with random sizes
-                sub_start = start
-                while sub_start < end:
-                    target = random.randint(min_chunk_len, max_chunk_len)
-                    sub_end = min(sub_start + target, end)
-                    
-                    if (sub_end - sub_start) >= min_chunk_len or sub_end == end:
-                        save_chunk([(sub_start, sub_end)], chunk_idx)
-                        chunk_idx += 1
-                    sub_start = sub_end
-                
-                current_target_len = random.randint(min_chunk_len, max_chunk_len)
-                continue
-
-            # Regular grouping logic
-            if current_group_duration + seg_duration > current_target_len and current_group_duration >= min_chunk_len:
-                save_chunk(current_group, chunk_idx)
-                chunk_idx += 1
-                current_group = [(start, end)]
-                current_group_duration = seg_duration
-                current_target_len = random.randint(min_chunk_len, max_chunk_len)
-            else:
-                current_group.append((start, end))
-                current_group_duration += seg_duration
-                
-        # Save last group
-        if current_group:
-            save_chunk(current_group, chunk_idx)
+        for i, group in enumerate(groups):
+            prev_end = groups[i - 1][-1][1] if i > 0 else None
+            next_start = groups[i + 1][0][0] if i + 1 < len(groups) else None
+            save_chunk(group, i, prev_end, next_start)
             
         logger.info(f"[PID {pid}] --- split_audio_on_vad FINISHED for {video_id}. Found {len(processed_chunks)} chunks. Total Time: {time.time() - start_time_proc:.2f}s ---")
         return processed_chunks

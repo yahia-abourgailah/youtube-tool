@@ -1,8 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from sqlalchemy.orm import Session
-from . import models, schemas, database
-from .api import channels, videos, chunks, jobs, export, logs, settings
+from . import models, database
+from .api import channels, videos, chunks, jobs, export, logs, settings, transcribe, qa
+from .security import APIKeyMiddleware
 import os
 import logging
 
@@ -15,16 +17,28 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Egyptian ASR Dataset Builder")
 
-# Create database tables
-models.Base.metadata.create_all(bind=database.engine)
+# Schema changes are managed by Alembic (see backend/migrations and README).
+# The app no longer calls create_all(), which silently skipped new columns on
+# existing databases.
+
+_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+]
+_allow_all_origins = "*" in _origins
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=["*"] if _allow_all_origins else _origins,
+    # Credentials cannot be combined with a wildcard origin.
+    allow_credentials=not _allow_all_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(APIKeyMiddleware)
 
 # Include routers
 app.include_router(channels.router, prefix="/api/channels", tags=["channels"])
@@ -34,12 +48,17 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])
 app.include_router(logs.router, prefix="/api/logs", tags=["logs"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
-from .api import transcribe
 app.include_router(transcribe.router, prefix="/api/transcribe", tags=["transcribe"])
+app.include_router(qa.router, prefix="/api/qa", tags=["qa"])
 
 @app.get("/")
 async def root():
     return {"message": "Egyptian ASR Dataset Builder API"}
+
+@app.get("/health")
+def health(db: Session = Depends(database.get_db)):
+    db.execute(text("SELECT 1"))
+    return {"status": "ok"}
 
 @app.get("/api/stats")
 async def get_stats(db: Session = Depends(database.get_db)):

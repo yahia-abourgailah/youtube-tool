@@ -38,7 +38,7 @@ def trigger_transcription(
         db.commit()
         db.refresh(job)
 
-        task = transcribe.transcribe_videos_task.delay(request.video_ids, request.force_retranscribe)
+        task = transcribe.transcribe_videos_task.delay(request.video_ids, request.force_retranscribe, job.id)
         job.celery_task_id = task.id
         db.commit()
         task_ids.append(task.id)
@@ -61,7 +61,7 @@ def trigger_transcription(
         db.commit()
         db.refresh(job)
 
-        task = transcribe.transcribe_channel_task.delay(channel.id, request.force_retranscribe)
+        task = transcribe.transcribe_channel_task.delay(channel.id, request.force_retranscribe, job.id)
         job.celery_task_id = task.id
         db.commit()
         task_ids.append(task.id)
@@ -93,7 +93,7 @@ def transcribe_all_untranscribed(db: Session = Depends(database.get_db)):
     db.commit()
     db.refresh(job)
 
-    task = transcribe.transcribe_all_untranscribed_task.delay()
+    task = transcribe.transcribe_all_untranscribed_task.delay(job.id)
     job.celery_task_id = task.id
     db.commit()
 

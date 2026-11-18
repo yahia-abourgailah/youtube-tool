@@ -11,7 +11,7 @@ logs/
 backend/__pycache__/
 backend/.venv/
 backend/*.pyc
-backend/sql_app.db
+*.db
 backend/data
 # Node (Frontend)
 frontend/node_modules/
@@ -25,3 +25,4 @@ backend/sql_app.db-shm
 backend/sql_app.db-wal
 finetune_channel_2/
 test_endpoints_results.json
+backups/

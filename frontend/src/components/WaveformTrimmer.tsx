@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.esm.js';
-import { trimChunk } from '../api';
+import { trimChunk, apiUrl } from '../api';
 import { Play, Save, X } from 'lucide-react';
 
 interface WaveformTrimmerProps {
@@ -40,7 +40,7 @@ const WaveformTrimmer = ({ chunkId, duration, onSave, onCancel }: WaveformTrimme
             barGap: 1,
             barRadius: 2,
             height: 80,
-            url: `/api/chunks/${chunkId}/audio?d=${duration}`,
+            url: apiUrl(`/api/chunks/${chunkId}/audio?d=${duration}`),
             plugins: [regions],
         });
 

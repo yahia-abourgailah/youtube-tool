@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { getChunks } from '../api';
+import { getChunks, apiUrl } from '../api';
 import { Play, Pause, Search, Scissors, ChevronLeft, ChevronRight } from 'lucide-react';
 import WaveformTrimmer from '../components/WaveformTrimmer';
 
@@ -14,7 +14,7 @@ const Trimming = () => {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [playingId, setPlayingId] = useState<string | null>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
-    const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+    const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const pageSize = 20;
 
     useEffect(() => {
@@ -62,7 +62,7 @@ const Trimming = () => {
             audioRef.current = null;
         }
         const chunk = chunks.find(c => c.chunk_id === id);
-        const audio = new Audio(`/api/chunks/${id}/audio?d=${chunk?.duration || 0}`);
+        const audio = new Audio(apiUrl(`/api/chunks/${id}/audio?d=${chunk?.duration || 0}`));
         audioRef.current = audio;
         setPlayingId(id);
         audio.play();

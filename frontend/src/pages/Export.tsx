@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { triggerExport, getJobs, getChannels } from '../api';
+import { triggerExport, getJobs, getChannels, apiUrl } from '../api';
 import { Download, Share2, CheckCircle, RefreshCw, Layers, Edit3 } from 'lucide-react';
 
 const Export = () => {
@@ -10,6 +10,9 @@ const Export = () => {
     const [repoId, setRepoId] = useState('');
     const [token, setToken] = useState('');
     const [isPrivate, setIsPrivate] = useState(true);
+    const [split, setSplit] = useState(false);
+    const [valRatio, setValRatio] = useState(0.05);
+    const [testRatio, setTestRatio] = useState(0.05);
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
@@ -77,7 +80,10 @@ const Export = () => {
                 hf_token: token,
                 private: isPrivate,
                 channel_ids: selectedChannels,
-                channel_names: channelNamesStr
+                channel_names: channelNamesStr,
+                split,
+                val_ratio: valRatio,
+                test_ratio: testRatio
             });
             loadJobs();
             alert("Export job started!");
@@ -183,9 +189,46 @@ const Export = () => {
                             />
                             Private Dataset
                         </label>
+
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                            <input
+                                type="checkbox"
+                                checked={split}
+                                onChange={(e) => setSplit(e.target.checked)}
+                            />
+                            Create train / validation / test splits
+                        </label>
+                        {split && (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                    Validation ratio
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="0.5"
+                                        step="0.01"
+                                        value={valRatio}
+                                        onChange={(e) => setValRatio(parseFloat(e.target.value) || 0)}
+                                        style={{ width: '100%', marginTop: '0.3rem', padding: '0.4rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-accent)', color: 'white' }}
+                                    />
+                                </label>
+                                <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                                    Test ratio
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="0.5"
+                                        step="0.01"
+                                        value={testRatio}
+                                        onChange={(e) => setTestRatio(parseFloat(e.target.value) || 0)}
+                                        style={{ width: '100%', marginTop: '0.3rem', padding: '0.4rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-accent)', color: 'white' }}
+                                    />
+                                </label>
+                            </div>
+                        )}
                         <button className="btn btn-primary" onClick={handleExport} disabled={loading || selectedChannels.length === 0}>
                             {loading ? <RefreshCw size={18} className="spin" /> : <Share2 size={18} />}
-                            Generate & Push to Hub
+                            Generate Dataset
                         </button>
                     </div>
                 </div>
@@ -193,10 +236,14 @@ const Export = () => {
                 <div className="card">
                     <h3 style={{ marginBottom: '1.5rem' }}>Local Download</h3>
                     <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-                        Generate the dataset locally and download it as a Parquet file.
+                        Generate the dataset locally and download the Parquet files (plus manifest).
+                        A HuggingFace token is only needed to also push to the Hub.
                     </p>
-                    <a href="/api/export/download" className="btn btn-primary" style={{ width: 'fit-content' }}>
-                        <Download size={18} /> Download Parquet
+                    <a href={apiUrl('/api/export/download')} className="btn btn-primary" style={{ width: 'fit-content' }}>
+                        <Download size={18} /> Download Dataset
+                    </a>
+                    <a href={apiUrl('/api/export/csv')} className="btn" style={{ width: 'fit-content', marginTop: '0.5rem' }}>
+                        <Download size={18} /> Download Transcripts CSV
                     </a>
                 </div>
             </div>

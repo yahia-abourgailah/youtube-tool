@@ -14,7 +14,11 @@ class Status(str, enum.Enum):
 class JobType(str, enum.Enum):
     DOWNLOAD = "download"
     SPLIT = "split"
+    TRANSCRIPTION = "transcription"
     EXPORT = "export"
+    CHANNEL_PROCESS = "channel_process"
+    MAINTENANCE = "maintenance"
+    QA = "qa"
 
 class Channel(Base):
     __tablename__ = "channels"
@@ -22,6 +26,7 @@ class Channel(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String(255), unique=True, index=True)
     name = Column(String(255), nullable=True)
+    speaker = Column(String(255), nullable=True)
     status = Column(String(50), default=Status.PENDING)
     celery_task_id = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -58,6 +63,10 @@ class AudioChunk(Base):
     start_time = Column(Float)
     end_time = Column(Float)
     transcript_text = Column(Text)
+    asr_model = Column(String(100), nullable=True)
+    asr_version = Column(String(100), nullable=True)
+    confidence = Column(Float, nullable=True)
+    language = Column(String(20), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     video = relationship("Video", back_populates="chunks")

@@ -3,8 +3,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from .. import models, schemas, database
-from ..tasks.download import download_video_task
-import os
+from ..tasks.download import queue_video_download
+from ..utils import storage, deletion
 import logging
 
 logger = logging.getLogger(__name__)
@@ -71,47 +71,43 @@ def retry_all_videos(db: Session = Depends(database.get_db)):
     videos = db.query(models.Video).filter(models.Video.status.in_(["failed", "pending"])).all()
     triggered_count = 0
     for video in videos:
-        video.status = "pending"
-        video.retry_count = 0
-        task = download_video_task.apply_async(args=[video.id])
-        video.celery_task_id = task.id
-        triggered_count += 1
+        try:
+            queue_video_download(db, video)
+            triggered_count += 1
+        except Exception as exc:
+            logger.error(f"Could not queue video {video.id}: {exc}")
 
-    db.commit()
     return {"message": f"Retry triggered for {triggered_count} videos"}
 
 @router.post("/retry-failed")
 def retry_failed_videos(db: Session = Depends(database.get_db)):
     # Support retrying both failed and pending videos (as promised in the UI)
-    videos_query = db.query(models.Video).filter(models.Video.status.in_(["failed", "pending"]))
-    videos = videos_query.all()
-    count_in_db = videos_query.count()
-    logger.info(f"Retry failed/pending: Found {len(videos)} videos in list, {count_in_db} via count()")
-    
+    videos = db.query(models.Video).filter(models.Video.status.in_(["failed", "pending"])).all()
+    logger.info(f"Retry failed/pending: Found {len(videos)} videos in list")
+
     triggered_count = 0
     for video in videos:
-        video.status = "pending"
-        video.retry_count = 0
-        task = download_video_task.delay(video.id)
-        video.celery_task_id = task.id
-        triggered_count += 1
-        logger.info(f"Completed retrying video {video.id}")
-    
-    db.commit()
+        try:
+            queue_video_download(db, video)
+            triggered_count += 1
+        except Exception as exc:
+            logger.error(f"Could not queue video {video.id}: {exc}")
+
     logger.info(f"Retry triggered for {triggered_count} videos")
     return {"message": f"Retry triggered for {triggered_count} videos"}
 
 @router.post("/{video_id}/retry")
-def retry_video(video_id: int, db: Session = Depends(database.get_db)):
+def retry_video(video_id: int, force: bool = False, db: Session = Depends(database.get_db)):
     video = db.query(models.Video).filter(models.Video.id == video_id).first()
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
-    video.status = "pending"
-    video.retry_count = 0
-    task = download_video_task.delay(video.id)
-    video.celery_task_id = task.id
-    db.commit()
-    return {"message": "Retry triggered", "task_id": task.id}
+    if video.status == "completed" and not force:
+        raise HTTPException(
+            status_code=400,
+            detail="Video is already completed. Re-downloading deletes its chunks and transcripts; pass force=true to confirm.",
+        )
+    job = queue_video_download(db, video)
+    return {"message": "Retry triggered", "task_id": job.celery_task_id, "job_id": job.id}
 
 @router.post("/{video_id}/stop")
 def stop_video_task(video_id: int, db: Session = Depends(database.get_db)):
@@ -142,8 +138,8 @@ def reset_video(video_id: int, db: Session = Depends(database.get_db)):
     video.status = "pending"
     video.celery_task_id = None
     video.retry_count = 0
-    db.commit()
-    video.retry_count = 0
+    # Clear the previous error so the auto-retry sweep treats this as a fresh video
+    video.error_message = None
     db.commit()
     return {"message": "Video reset"}
 
@@ -161,33 +157,23 @@ def refine_vad_video(video_id: int, db: Session = Depends(database.get_db)):
 
 @router.post("/cleanup")
 def cleanup_storage(db: Session = Depends(database.get_db)):
-    # Target videos that are finished (completed or failed)
+    """Delete raw downloads and legacy transcript files, keeping processed chunks."""
     videos = db.query(models.Video).filter(models.Video.status.in_(["completed", "failed"])).all()
     deleted_count = 0
-    data_dir = os.path.join(os.getcwd(), "data")
-    
     for video in videos:
-        # Files to delete: {video_id}_audio.*, {video_id}_transcript.txt, {video_id}_metadata.json
-        patterns = [
-            f"{video.video_id}_audio.wav",
-            f"{video.video_id}_audio.mp4",
-            f"{video.video_id}_audio.webm",
-            f"{video.video_id}_audio.m4a",
-            f"{video.video_id}_audio.mp3",
-            f"{video.video_id}_transcript.txt",
-            f"{video.video_id}_metadata.json"
-        ]
-        
-        for pattern in patterns:
-            file_path = os.path.join(data_dir, pattern)
-            if os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    deleted_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to delete {file_path}: {e}")
-                    
+        deleted_count += storage.cleanup_video_sources(video)
     return {"message": f"Cleanup completed. Deleted {deleted_count} source/auxiliary files."}
+
+
+@router.delete("/{video_id}")
+def delete_video(video_id: int, db: Session = Depends(database.get_db)):
+    """Delete a video, its chunks, jobs and audio files."""
+    video = db.query(models.Video).filter(models.Video.id == video_id).first()
+    if not video:
+        raise HTTPException(status_code=404, detail="Video not found")
+    youtube_id = video.video_id
+    deletion.delete_video(db, video)
+    return {"message": f"Video {youtube_id} deleted"}
 
 @router.get("/{video_id}/logs")
 def get_video_logs(video_id: int, db: Session = Depends(database.get_db)):

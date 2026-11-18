@@ -1,5 +1,6 @@
 import os
-from pytubefix import YouTube, Channel
+import subprocess
+from pytubefix import YouTube, Channel, Playlist
 from pytubefix.exceptions import VideoUnavailable
 from typing import List, Dict, Any, Optional
 import json
@@ -8,10 +9,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 def get_channel_videos(channel_url: str) -> tuple[List[Dict[str, Any]], Optional[str]]:
-    """Fetch all videos from a channel URL. Returns (videos, channel_name)."""
+    """Fetch all videos from a channel or playlist URL. Returns (videos, channel_name)."""
     try:
         logger.info(f"Fetching videos for channel: {channel_url}")
-        c = Channel(channel_url)
+        is_playlist = "list=" in channel_url
+        c = Playlist(channel_url) if is_playlist else Channel(channel_url)
         # Some versions of pytubefix need standard Channel init, but we can try to force it to use WEB client
         # if the default fails. For now, standard is safer for whole channel iteration.
         videos = []
@@ -20,7 +22,7 @@ def get_channel_videos(channel_url: str) -> tuple[List[Dict[str, Any]], Optional
         # Try to get channel name
         try:
             # Someytubefix versions might fail here if the channel page layout changed
-            channel_name = c.channel_name
+            channel_name = c.title if is_playlist else c.channel_name
             logger.info(f"Channel name: {channel_name}")
         except Exception as name_err:
             logger.warning(f"Could not fetch channel name for {channel_url}: {str(name_err)}")
@@ -60,8 +62,11 @@ def download_audio(video_id: str, output_path: str) -> Optional[str]:
         url = f"https://www.youtube.com/watch?v={video_id}"
         yt = YouTube(url, use_oauth=False, allow_oauth_cache=True)
         
-        # Get highest quality audio stream
-        audio_stream = yt.streams.filter(only_audio=True).first()
+        # Videos can carry extra AI-dubbed audio tracks (e.g. English); always take the
+        # original (default) track, at the highest bitrate
+        audio_streams = yt.streams.filter(only_audio=True)
+        original = [s for s in audio_streams if getattr(s, "is_default_audio_track", True)]
+        audio_stream = max(original or audio_streams, key=lambda s: s.bitrate or 0, default=None)
         if not audio_stream:
             logger.error(f"No audio stream found for {video_id}")
             return None
@@ -70,15 +75,16 @@ def download_audio(video_id: str, output_path: str) -> Optional[str]:
         temp_filename = f"{video_id}_temp.{audio_stream.subtype}"
         temp_path = audio_stream.download(output_path=output_path, filename=temp_filename)
         
-        # Convert to WAV (ensure mono and consistent sample rate if needed, 
-        # but split_audio_on_silence handles that too)
-        from pydub import AudioSegment
+        # Convert straight to 16 kHz mono WAV with ffmpeg. It streams the file instead of
+        # loading hours of audio into memory, and the output is ~6x smaller than full-rate stereo.
         wav_filename = f"{video_id}_audio.wav"
         wav_path = os.path.join(output_path, wav_filename)
-        
-        logger.info(f"Converting {temp_path} to WAV...")
-        audio = AudioSegment.from_file(temp_path)
-        audio.export(wav_path, format="wav")
+
+        logger.info(f"Converting {temp_path} to 16 kHz mono WAV...")
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", temp_path, "-vn", "-ac", "1", "-ar", "16000", wav_path],
+            check=True,
+        )
         
         # Clean up temp file
         if os.path.exists(temp_path):

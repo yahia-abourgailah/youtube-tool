@@ -48,7 +48,12 @@ def create_hf_dataset_with_subsets(chunks_by_channel: Dict[str, List[Dict[str, A
             "duration": Value("float32"),
             "original_video_id": Value("string"),
             "channel_name": Value("string"),
-            "channel_url": Value("string")
+            "channel_url": Value("string"),
+            "speaker": Value("string"),
+            "asr_model": Value("string"),
+            "asr_version": Value("string"),
+            "confidence": Value("float32"),
+            "language": Value("string")
         })
         
         for channel_name, chunks_data in chunks_by_channel.items():
@@ -77,7 +82,7 @@ def create_hf_dataset_with_subsets(chunks_by_channel: Dict[str, List[Dict[str, A
         return None
 
 def sanitize_config_name(name: str) -> str:
-    """
+    r"""
     Sanitize channel name to be a valid HuggingFace config/split name.
     HuggingFace split names should match '^\w+(\.\w+)*$', which means 
     alphanumeric, underscores, and dots only (no hyphens).

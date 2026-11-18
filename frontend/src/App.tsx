@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Users, Video, Music, Settings, Download, BarChart2, Mic, Menu, X, Scissors } from 'lucide-react';
+import { LayoutDashboard, Users, Video, Music, Settings, Download, BarChart2, Mic, Menu, X, Scissors, ShieldCheck } from 'lucide-react';
 import './index.css';
 
 // Lazy load pages
@@ -13,6 +13,7 @@ const Transcription = React.lazy(() => import('./pages/Transcription'));
 const SettingsPage = React.lazy(() => import('./pages/Settings'));
 const Statistics = React.lazy(() => import('./pages/Statistics'));
 const Trimming = React.lazy(() => import('./pages/Trimming'));
+const QA = React.lazy(() => import('./pages/QA'));
 
 const Sidebar = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
   const location = useLocation();
@@ -59,6 +60,9 @@ const Sidebar = ({ open, onClose }: { open: boolean; onClose: () => void }) => {
           <NavLink to="/stats" onClick={handleNav} className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`}>
             <BarChart2 size={20} /> Stats
           </NavLink>
+          <NavLink to="/qa" onClick={handleNav} className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <ShieldCheck size={20} /> QA
+          </NavLink>
           <NavLink to="/settings" onClick={handleNav} className={({ isActive }: { isActive: boolean }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Settings size={20} /> Settings
           </NavLink>
@@ -89,6 +93,7 @@ const App = () => {
               <Route path="/transcribe" element={<Transcription />} />
               <Route path="/export" element={<Export />} />
               <Route path="/stats" element={<Statistics />} />
+              <Route path="/qa" element={<QA />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

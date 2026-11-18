@@ -8,8 +8,10 @@ import tempfile
 from pathlib import Path
 
 # ─── AUDIO FILES TO TEST ─────────────────────────────────────────────
-AUDIO_FOLDER = "/home/yahia/Desktop/github-repos/youtube-audio-extractor/data/channels/1/videos/-hIgi5DXI3M/"
-NUM_TEST_FILES = 3  # how many files to test
+# Point this at a directory of chunk WAV/MP3 files, e.g.
+#   ASR_TEST_AUDIO_DIR=./data/channels/1/videos/VIDEO_ID python test_endpoints.py
+AUDIO_FOLDER = os.getenv("ASR_TEST_AUDIO_DIR", "")
+NUM_TEST_FILES = int(os.getenv("ASR_TEST_FILES", "3"))  # how many files to test
 
 # ─── ENDPOINTS CONFIGURATION ─────────────────────────────────────────
 # Add/remove/edit endpoints here. Each entry needs:
@@ -19,34 +21,21 @@ NUM_TEST_FILES = 3  # how many files to test
 #   file_key : the form field name for the audio file (usually "audio" or "file")
 #   parse    : function to extract text from the JSON response
 
+_asr_headers = {}
+if os.getenv("ASR_API_KEY"):
+    _asr_headers["X-API-Key"] = os.environ["ASR_API_KEY"]
+if os.getenv("ASR_API_SECRET"):
+    _asr_headers["X-API-Secret"] = os.environ["ASR_API_SECRET"]
+
 ENDPOINTS = [
     {
         "name": "ASR Endpoint (Current)",
-        "url": "http://107.170.20.205:8000/transcribe",
-        "headers": {
-            "X-API-Key": os.environ["ASR_API_KEY"],
-            "X-API-Secret": os.environ["ASR_API_SECRET"],
-        },
+        "url": os.getenv("ASR_ENDPOINT", "http://107.170.20.205:8000/transcribe"),
+        "headers": _asr_headers,
         "file_key": "audio",
         "parse": lambda data: data.get("text", data.get("transcription", "")),
     },
     # ── Add more endpoints below ──
-    # {
-    #     "name": "Whisper API",
-    #     "url": "https://your-whisper-endpoint.com/v1/audio/transcriptions",
-    #     "headers": {
-    #         "Authorization": "Bearer YOUR_TOKEN",
-    #     },
-    #     "file_key": "file",
-    #     "parse": lambda data: data.get("text", ""),
-    # },
-    # {
-    #     "name": "Another ASR",
-    #     "url": "http://localhost:9000/transcribe",
-    #     "headers": {},
-    #     "file_key": "audio",
-    #     "parse": lambda data: data.get("transcription", ""),
-    # },
 ]
 
 TIMEOUT = 180
@@ -55,7 +44,10 @@ TIMEOUT = 180
 def get_test_files(folder, count):
     """Pick first N audio files from the folder."""
     extensions = {".mp3", ".wav", ".ogg", ".flac", ".m4a"}
-    files = sorted(f for f in Path(folder).iterdir() if f.suffix.lower() in extensions)
+    path = Path(folder)
+    if not folder or not path.is_dir():
+        return []
+    files = sorted(f for f in path.iterdir() if f.suffix.lower() in extensions)
     return files[:count]
 
 
@@ -106,6 +98,9 @@ def transcribe(endpoint, audio_path):
 
 def main():
     num_files = int(sys.argv[1]) if len(sys.argv) > 1 else NUM_TEST_FILES
+    if not AUDIO_FOLDER:
+        print("Set ASR_TEST_AUDIO_DIR to a folder containing audio chunks.")
+        return
     audio_files = get_test_files(AUDIO_FOLDER, num_files)
 
     if not audio_files:

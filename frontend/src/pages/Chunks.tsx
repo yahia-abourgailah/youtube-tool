@@ -1,6 +1,14 @@
 import { useEffect, useState, useRef } from 'react';
-import { getChunks, reprocessChunks, updateChunkTranscript, deleteChunk } from '../api';
+import { getChunks, getChunkCounts, reprocessChunks, updateChunkTranscript, deleteChunk, apiUrl } from '../api';
 import { Play, Pause, Search, RefreshCw, Scissors, Pencil, Save, X, Trash2 } from 'lucide-react';
+
+type TranscriptFilter = 'all' | 'transcribed' | 'untranscribed';
+
+const FILTER_TABS: { key: TranscriptFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'transcribed', label: 'Transcribed' },
+    { key: 'untranscribed', label: 'Not transcribed' },
+];
 
 const Chunks = () => {
     const [chunks, setChunks] = useState<any[]>([]);
@@ -16,17 +24,19 @@ const Chunks = () => {
     const [saving, setSaving] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [filter, setFilter] = useState<TranscriptFilter>('all');
+    const [counts, setCounts] = useState<Record<TranscriptFilter, number>>({ all: 0, transcribed: 0, untranscribed: 0 });
     const [currentTime, setCurrentTime] = useState(0);
     const [audioDuration, setAudioDuration] = useState(0);
     const activeChunkRef = useRef<string | null>(null);
     const audioRef = useRef<HTMLAudioElement>(new Audio());
-    const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+    const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const rafRef = useRef<number | null>(null);
     const pageSize = 20;
 
     useEffect(() => {
         loadChunks();
-    }, [page, debouncedSearch]);
+    }, [page, debouncedSearch, filter]);
 
     useEffect(() => {
         const audio = audioRef.current;
@@ -59,6 +69,8 @@ const Chunks = () => {
         setLoading(true);
         const params: any = { page, size: pageSize };
         if (debouncedSearch) params.search = debouncedSearch;
+        if (filter !== 'all') params.transcribed = filter === 'transcribed';
+        getChunkCounts().then(setCounts).catch(() => {});
         getChunks(params).then(data => {
             setChunks(data.items);
             setTotalPages(data.pages);
@@ -109,7 +121,7 @@ const Chunks = () => {
             stopTimeTracking();
             activeChunkRef.current = id;
             setAudioDuration(chunk?.duration || 0);
-            audio.src = `/api/chunks/${id}/audio?d=${chunk?.duration || 0}`;
+            audio.src = apiUrl(`/api/chunks/${id}/audio?d=${chunk?.duration || 0}`);
             audio.onloadedmetadata = () => {
                 if (audio.duration && isFinite(audio.duration)) {
                     setAudioDuration(audio.duration);
@@ -181,6 +193,7 @@ const Chunks = () => {
             await deleteChunk(chunkId);
             setChunks(prev => prev.filter(c => c.chunk_id !== chunkId));
             setTotalItems(prev => prev - 1);
+            getChunkCounts().then(setCounts).catch(() => {});
         } catch (err: any) {
             alert('Failed to delete chunk: ' + err.message);
         }
@@ -192,6 +205,7 @@ const Chunks = () => {
         try {
             await updateChunkTranscript(editingId, editText);
             setChunks(prev => prev.map(c => c.chunk_id === editingId ? { ...c, transcript_text: editText } : c));
+            getChunkCounts().then(setCounts).catch(() => {});
             setEditingId(null);
             setEditText('');
         } catch (err: any) {
@@ -214,6 +228,19 @@ const Chunks = () => {
                     {refining ? <RefreshCw className="animate-spin" size={18} /> : <Scissors size={18} />}
                     {refining ? ' Starting...' : ' Refine Lengthy Chunks'}
                 </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                {FILTER_TABS.map(tab => (
+                    <button
+                        key={tab.key}
+                        className={`btn ${filter === tab.key ? 'btn-primary' : ''}`}
+                        onClick={() => { setFilter(tab.key); setPage(1); }}
+                        style={{ padding: '0.4rem 0.9rem', fontSize: '0.85rem' }}
+                    >
+                        {tab.label} ({counts[tab.key]})
+                    </button>
+                ))}
             </div>
 
             <div className="card" style={{ marginBottom: '1.5rem' }}>
@@ -338,7 +365,9 @@ const Chunks = () => {
                                         cursor: 'pointer'
                                     }}
                                 >
-                                    {chunk.transcript_text}
+                                    {chunk.transcript_text || (
+                                        <span style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>Not transcribed yet</span>
+                                    )}
                                 </div>
                                 <Pencil
                                     size={14}
@@ -359,7 +388,7 @@ const Chunks = () => {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '2rem', color: 'var(--text-secondary)', fontSize: '0.9rem', flexWrap: 'wrap', gap: '1rem' }}>
-                <div>Total: {totalItems} chunks</div>
+                <div>Showing: {totalItems} chunks</div>
                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     <button
                         className="btn"

@@ -6,10 +6,20 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
     env_file: .env
+    environment:
+      - RUN_MIGRATIONS=true
     ports:
       - "7080:7080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     depends_on:
       redis:
+        condition: service_healthy
+      mysql:
         condition: service_healthy
     networks:
       - asr-network
@@ -17,14 +27,60 @@ services:
   celery-worker:
     build: ./backend
     command: celery -A app.celery_app worker --loglevel=info
+    # Cap the worker so a heavy download/split can't freeze the whole machine
+    mem_limit: ${WORKER_MEM_LIMIT:-5g}
+    cpus: ${WORKER_CPUS:-4}
+    environment:
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
     volumes:
       - ./backend:/app
       - ./data:/app/data
       - ./logs:/app/logs
     env_file: .env
     depends_on:
+      app:
+        condition: service_healthy
       redis:
         condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - asr-network
+
+  celery-beat:
+    build: ./backend
+    command: celery -A app.celery_app beat --loglevel=info --schedule=/app/logs/celerybeat-schedule
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+    env_file: .env
+    depends_on:
+      app:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - asr-network
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - asr-network
 
@@ -48,6 +104,7 @@ services:
     environment:
       - VITE_API_URL=http://app:7080
       - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
+      - VITE_API_KEY=${API_KEY:-}
     depends_on:
       - app
     networks:
@@ -56,3 +113,6 @@ services:
 networks:
   asr-network:
     driver: bridge
+
+volumes:
+  mysql-data:

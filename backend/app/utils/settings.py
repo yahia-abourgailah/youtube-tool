@@ -1,8 +1,9 @@
 import os
 import json
 from typing import Dict, Any
+from . import paths
 
-DATA_PATH = os.getenv("DATA_PATH", os.path.join(os.getcwd(), "data"))
+DATA_PATH = paths.data_path()
 SETTINGS_PATH = os.path.join(DATA_PATH, "settings.json")
 
 DEFAULT_SETTINGS = {
@@ -12,13 +13,14 @@ DEFAULT_SETTINGS = {
     "min_chunk_len": 5000,
     "max_chunk_len": 30000,
     "retry_count": 3,
-    "transcription_prompt": """Transcribe this audio file accurately in Egyptian Arabic. 
-- Use Egyptian dialect spelling (Ammiya).
-- Don't convert to formal Arabic.
-- Use punctuation appropriately based on the audio.
-- Only provide the transcribed text without additional commentary.""",
     "vad_threshold": 0.25,
-    "min_speech_duration_ms": 250
+    "min_speech_duration_ms": 250,
+    # Automatically queue transcription as soon as a video's chunks are created.
+    # A periodic safety-net sweep (celery beat) catches anything that was missed.
+    "auto_transcribe": True,
+    # Automatically re-queue failed/orphaned videos. Bounded per video by
+    # AUTO_RETRY_MAX_ROUNDS, and safety markers are never retried.
+    "auto_retry": True
 }
 
 def get_settings() -> Dict[str, Any]:

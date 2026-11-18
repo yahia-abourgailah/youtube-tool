@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { triggerTranscription, transcribeAllUntranscribed, getJobs, getChannels, getVideos } from '../api';
+import { triggerTranscription, transcribeAllUntranscribed, getJobs, getChannels, getVideos, getSettings } from '../api';
 import { Mic, CheckCircle, RefreshCw, Layers, Film, Search, Zap } from 'lucide-react';
 
 type Mode = 'channel' | 'video';
@@ -10,6 +10,7 @@ const Transcription = () => {
     const [selectedChannels, setSelectedChannels] = useState<number[]>([]);
     const [forceRetranscribe, setForceRetranscribe] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [autoTranscribe, setAutoTranscribe] = useState(false);
 
     const [mode, setMode] = useState<Mode>('channel');
     const [videos, setVideos] = useState<any[]>([]);
@@ -20,6 +21,7 @@ const Transcription = () => {
     useEffect(() => {
         loadJobs();
         loadChannels();
+        getSettings().then(s => setAutoTranscribe(!!s.auto_transcribe)).catch(() => {});
         const interval = setInterval(loadJobs, 5000);
         return () => clearInterval(interval);
     }, []);
@@ -119,7 +121,7 @@ const Transcription = () => {
     return (
         <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
-                <h2 style={{ margin: 0 }}>Gemini Transcription</h2>
+                <h2 style={{ margin: 0 }}>Transcription</h2>
                 <button
                     className="btn btn-primary"
                     disabled={loading}
@@ -139,6 +141,14 @@ const Transcription = () => {
                     <Zap size={18} /> Transcribe All Untranscribed
                 </button>
             </div>
+
+            {autoTranscribe && (
+                <div className="card" style={{ marginBottom: '1rem', borderLeft: '3px solid var(--success)' }}>
+                    <strong>Automatic transcription is ON.</strong>{' '}
+                    New chunks are transcribed as soon as they are created; a periodic sweep retries anything missed.
+                    You can turn this off in Settings.
+                </div>
+            )}
 
             <div className="stats-grid">
                 <div className="card">
