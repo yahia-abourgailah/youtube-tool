@@ -32,6 +32,8 @@ ASR_PAD_MS = int(os.getenv("ASR_PAD_MS", "500"))
 ASR_TAIL_CHECK = os.getenv("ASR_TAIL_CHECK", "true").lower() == "true"
 ASR_TAIL_MS = int(os.getenv("ASR_TAIL_MS", "4000"))
 ASR_RETRY_PADS_MS = [0, 1000, 250]
+# Share of the tail clip's words that must appear, in order, at the end of the full transcript
+ASR_TAIL_MATCH = float(os.getenv("ASR_TAIL_MATCH", "0.7"))
 # Failed chunks are retried by the auto-transcription sweep with exponential
 # backoff (15m, 30m, 1h, ...) capped here, so a bad chunk can't hammer the server.
 MAX_BACKOFF_MINUTES = int(os.getenv("AUTO_TRANSCRIBE_MAX_BACKOFF_MINUTES", "360"))
@@ -118,12 +120,15 @@ def _padded(segment: AudioSegment, pad_ms: int) -> AudioSegment:
 
 
 _AR_LETTERS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه", "ؤ": "و", "ئ": "ي"})
+_GLUED_PUNCT = re.compile(r"([.,،؛;:!?؟…]+)(?=\w)")
 _AR_MARKS = re.compile(r"[\u064B-\u0652\u0640]|[^\w]")
 
 
 def _tokens(text: str) -> list:
     """(original word, normalized word) pairs, so spelling variants like ة/ه or أ/ا still match."""
     pairs = []
+    # "بتغني..كل" -> "بتغني.. كل": punctuation glued to the next word hides that word
+    text = _GLUED_PUNCT.sub(r"\1 ", text)
     for word in text.split():
         norm = _AR_MARKS.sub("", word).lower().translate(_AR_LETTERS)
         if norm:
@@ -131,17 +136,33 @@ def _tokens(text: str) -> list:
     return pairs
 
 
+def _closest_word(word: str, candidates: list) -> str:
+    """The most similar candidate (exact match first), or the word itself if none is close enough."""
+    if word in candidates:
+        return word
+    best = max(candidates, key=lambda c: SequenceMatcher(None, word, c).ratio(), default=None)
+    return best if best is not None and _same_word(word, best) else word
+
+
 def _same_word(a: str, b: str) -> bool:
     return a == b or SequenceMatcher(None, a, b).ratio() >= 0.75
 
 
 def _tail_covered(full_text: str, tail_text: str) -> bool:
-    """True if the last words heard in the tail clip appear at the end of the full transcript."""
+    """
+    True if the words heard in the tail clip appear, in order, at the end of the full transcript.
+    Checking only the last words isn't enough: when the speaker repeats a phrase the ASR keeps
+    one copy, and the last words still match while the repetition is missing.
+    """
     tail = [n for _, n in _tokens(tail_text)]
     if not tail:
         return True
     window = [n for _, n in _tokens(full_text)][-(len(tail) + 4):]
-    return all(any(_same_word(t, w) for w in window) for t in tail[-2:])
+    if not all(any(_same_word(t, w) for w in window) for t in tail[-2:]):
+        return False
+    tail_norm = [_closest_word(t, window) for t in tail]
+    matched = sum(b.size for b in SequenceMatcher(None, window, tail_norm, autojunk=False).get_matching_blocks())
+    return matched / len(tail) >= ASR_TAIL_MATCH
 
 
 def _stitch(full_text: str, tail_text: str) -> Optional[str]:
@@ -154,7 +175,7 @@ def _stitch(full_text: str, tail_text: str) -> Optional[str]:
     tail = _tokens(tail_text)
     window = [n for _, n in _tokens(full_text)][-(len(tail) + 4):]
     # Map spelling variants onto the word used in the full transcript so exact matching works
-    tail_norm = [next((w for w in window if _same_word(n, w)), n) for _, n in tail]
+    tail_norm = [_closest_word(n, window) for _, n in tail]
     blocks = SequenceMatcher(None, window, tail_norm, autojunk=False).get_matching_blocks()
     # The overlap must reach (almost) the end of the full transcript
     ends = [b.b + b.size for b in blocks if b.size and b.a + b.size >= len(window) - 1]
