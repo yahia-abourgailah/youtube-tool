@@ -1,4 +1,5 @@
 import os
+from sqlalchemy.exc import IntegrityError
 import uuid
 import redis
 from sqlalchemy import or_, and_
@@ -52,26 +53,41 @@ def process_channel_task(self, channel_id: int):
         
         logger.info(f"Channel {channel_id} has {len(videos)} videos total.")
         
+        # A video can be in several playlists/channels; it is downloaded and transcribed once,
+        # under the first one that adds it (videos.video_id is unique)
         new_videos_count = 0
+        duplicate_count = 0
         for v_data in videos:
-            # Check if video already exists
             existing_video = db.query(models.Video).filter(models.Video.video_id == v_data["video_id"]).first()
-            if not existing_video:
-                video = models.Video(
-                    video_id=v_data["video_id"],
-                    channel_id=channel.id,
-                    title=v_data["title"],
-                    duration=v_data["duration"],
-                    upload_date=v_data["upload_date"],
-                    status="pending"
-                )
-                db.add(video)
+            if existing_video:
+                duplicate_count += 1
+                continue
+            video = models.Video(
+                video_id=v_data["video_id"],
+                channel_id=channel.id,
+                title=v_data["title"],
+                duration=v_data["duration"],
+                upload_date=v_data["upload_date"],
+                status="pending"
+            )
+            db.add(video)
+            try:
                 db.flush()
-                # Queue individual video download (creates its own job record)
-                queue_video_download(db, video)
-                new_videos_count += 1
-        
-        activity_log.log_activity(db, f"Found {len(videos)} videos, queued {new_videos_count} new for processing", channel_id=channel_id)
+            except IntegrityError:
+                # Another playlist processed at the same time added this video first.
+                # Everything before this point is already committed, so only this insert is undone.
+                db.rollback()
+                duplicate_count += 1
+                continue
+            # Queue individual video download (creates its own job record)
+            queue_video_download(db, video)
+            new_videos_count += 1
+
+        activity_log.log_activity(
+            db,
+            f"Found {len(videos)} videos, queued {new_videos_count} new, skipped {duplicate_count} already added from another playlist/channel",
+            channel_id=channel_id,
+        )
         
         logger.info(f"Queued {new_videos_count} new videos for downloading from channel {channel_id}.")
         channel.status = "completed"
