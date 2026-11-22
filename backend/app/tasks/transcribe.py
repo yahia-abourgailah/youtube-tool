@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 from typing import Optional
 from pydub import AudioSegment, silence
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from celery.signals import worker_ready
 from ..celery_app import celery_app
 from .. import models, database
 from ..utils import logging as activity_log, settings as settings_util, paths
@@ -169,23 +170,34 @@ def _stitch(full_text: str, tail_text: str) -> Optional[str]:
     """
     Append the words of the tail clip that come after the end of the full transcript.
     The tail clip starts inside the chunk, so its first words overlap the end of the
-    full transcript; we find that overlap and append what follows it.
-    Returns None if the overlap can't be found reliably.
+    full transcript. The overlap must end on the full transcript's last word, so we try
+    each tail word similar to that last word as the end of the overlap, score how well the
+    tail words before it agree with the end of the full transcript, and append what
+    follows the best one. Returns None if no overlap is found.
     """
     tail = _tokens(tail_text)
     window = [n for _, n in _tokens(full_text)][-(len(tail) + 4):]
-    # Map spelling variants onto the word used in the full transcript so exact matching works
-    tail_norm = [_closest_word(n, window) for _, n in tail]
-    blocks = SequenceMatcher(None, window, tail_norm, autojunk=False).get_matching_blocks()
-    # The overlap must reach (almost) the end of the full transcript
-    ends = [b.b + b.size for b in blocks if b.size and b.a + b.size >= len(window) - 1]
-    if not ends:
+    if not tail or not window:
         return None
-    cut = max(ends)
-    missing = tail[cut:]
+    tail_norm = [_closest_word(n, window) for _, n in tail]
+
+    best_cut, best_score = None, 0.0
+    for cut in range(1, len(tail) + 1):
+        if not _same_word(tail_norm[cut - 1], window[-1]):
+            continue
+        overlap = tail_norm[:cut]
+        context = window[-(cut + 2):]
+        matched = sum(b.size for b in SequenceMatcher(None, context, overlap, autojunk=False).get_matching_blocks())
+        score = matched / cut
+        if score >= 0.5 and score >= best_score:
+            best_cut, best_score = cut, score
+    if best_cut is None:
+        return None
+
+    missing = tail[best_cut:]
     head = full_text.rstrip()
     # The full transcript often ends with a half word ("خطو"); replace it with the complete one
-    if missing and window and window[-1] != tail_norm[cut - 1 if cut else 0] and _same_word(window[-1], missing[0][1]):
+    if missing and window[-1] != tail_norm[best_cut - 1] and _same_word(window[-1], missing[0][1]):
         head = head.rsplit(maxsplit=1)[0] if " " in head else ""
     return f"{head} {' '.join(orig for orig, _ in missing)}".strip()
 
@@ -672,3 +684,19 @@ def transcribe_all_untranscribed_task(self, job_id: int = None):
         return f"Task Failed: {str(e)}"
     finally:
         db.close()
+
+@worker_ready.connect
+def _release_stale_transcription_locks(**kwargs):
+    """
+    When the worker (re)starts, no transcription task of ours is running any more, but the
+    per-video locks of tasks that were stopped by the restart are still in Redis for up to
+    24h, so the sweep would skip those videos. Clear them and run a sweep right away.
+    Assumes a single worker container; with several workers this would clear locks of
+    tasks still running elsewhere.
+    """
+    stale = list(_redis.scan_iter("transcribe:video:*"))
+    if stale:
+        _redis.delete(*stale)
+    _redis.delete("auto_transcribe:sweep")
+    logger.info(f"Worker ready: released {len(stale)} stale transcription lock(s), starting sweep")
+    auto_transcribe_sweep_task.delay()
